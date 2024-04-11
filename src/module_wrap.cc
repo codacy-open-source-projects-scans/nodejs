@@ -122,15 +122,15 @@ v8::Maybe<bool> ModuleWrap::CheckUnsettledTopLevelAwait() {
   if (!module->IsGraphAsync()) {  // There is no TLA, no need to check.
     return v8::Just(true);
   }
-  auto stalled = module->GetStalledTopLevelAwaitMessage(isolate);
-  if (stalled.size() == 0) {
+
+  auto stalled_messages =
+      std::get<1>(module->GetStalledTopLevelAwaitMessages(isolate));
+  if (stalled_messages.size() == 0) {
     return v8::Just(true);
   }
 
   if (env()->options()->warnings) {
-    for (auto& pair : stalled) {
-      Local<v8::Message> message = std::get<1>(pair);
-
+    for (auto& message : stalled_messages) {
       std::string reason = "Warning: Detected unsettled top-level await at ";
       std::string info =
           FormatErrorMessage(isolate, context, "", message, true);
@@ -142,8 +142,10 @@ v8::Maybe<bool> ModuleWrap::CheckUnsettledTopLevelAwait() {
   return v8::Just(false);
 }
 
-// new ModuleWrap(url, context, source, lineOffset, columnOffset)
-// new ModuleWrap(url, context, exportNames, syntheticExecutionFunction)
+// new ModuleWrap(url, context, source, lineOffset, columnOffset, cachedData)
+// new ModuleWrap(url, context, source, lineOffset, columOffset,
+//                hostDefinedOption)
+// new ModuleWrap(url, context, exportNames, evaluationCallback[, cjsModule])
 void ModuleWrap::New(const FunctionCallbackInfo<Value>& args) {
   CHECK(args.IsConstructCall());
   CHECK_GE(args.Length(), 3);
@@ -172,22 +174,37 @@ void ModuleWrap::New(const FunctionCallbackInfo<Value>& args) {
   int column_offset = 0;
 
   bool synthetic = args[2]->IsArray();
+
+  Local<PrimitiveArray> host_defined_options =
+      PrimitiveArray::New(isolate, HostDefinedOptions::kLength);
+  Local<Symbol> id_symbol;
   if (synthetic) {
-    // new ModuleWrap(url, context, exportNames, syntheticExecutionFunction)
+    // new ModuleWrap(url, context, exportNames, evaluationCallback[,
+    // cjsModule])
     CHECK(args[3]->IsFunction());
   } else {
     // new ModuleWrap(url, context, source, lineOffset, columOffset, cachedData)
+    // new ModuleWrap(url, context, source, lineOffset, columOffset,
+    // hostDefinedOption)
     CHECK(args[2]->IsString());
     CHECK(args[3]->IsNumber());
     line_offset = args[3].As<Int32>()->Value();
     CHECK(args[4]->IsNumber());
     column_offset = args[4].As<Int32>()->Value();
-  }
+    if (args[5]->IsSymbol()) {
+      id_symbol = args[5].As<Symbol>();
+    } else {
+      id_symbol = Symbol::New(isolate, url);
+    }
+    host_defined_options->Set(isolate, HostDefinedOptions::kID, id_symbol);
 
-  Local<PrimitiveArray> host_defined_options =
-      PrimitiveArray::New(isolate, HostDefinedOptions::kLength);
-  Local<Symbol> id_symbol = Symbol::New(isolate, url);
-  host_defined_options->Set(isolate, HostDefinedOptions::kID, id_symbol);
+    if (that->SetPrivate(context,
+                         realm->isolate_data()->host_defined_option_symbol(),
+                         id_symbol)
+            .IsNothing()) {
+      return;
+    }
+  }
 
   ShouldNotAbortOnUncaughtScope no_abort_scope(realm->env());
   TryCatchScope try_catch(realm->env());
@@ -215,8 +232,7 @@ void ModuleWrap::New(const FunctionCallbackInfo<Value>& args) {
           isolate, url, span, SyntheticModuleEvaluationStepsCallback);
     } else {
       ScriptCompiler::CachedData* cached_data = nullptr;
-      if (!args[5]->IsUndefined()) {
-        CHECK(args[5]->IsArrayBufferView());
+      if (args[5]->IsArrayBufferView()) {
         Local<ArrayBufferView> cached_data_buf = args[5].As<ArrayBufferView>();
         uint8_t* data =
             static_cast<uint8_t*>(cached_data_buf->Buffer()->Data());
@@ -279,9 +295,8 @@ void ModuleWrap::New(const FunctionCallbackInfo<Value>& args) {
     return;
   }
 
-  if (that->SetPrivate(context,
-                       realm->isolate_data()->host_defined_option_symbol(),
-                       id_symbol)
+  if (synthetic && args[4]->IsObject() &&
+      that->Set(context, realm->isolate_data()->imported_cjs_symbol(), args[4])
           .IsNothing()) {
     return;
   }
@@ -614,11 +629,10 @@ void ModuleWrap::EvaluateSync(const FunctionCallbackInfo<Value>& args) {
 
   if (module->IsGraphAsync()) {
     CHECK(env->options()->print_required_tla);
-    auto stalled = module->GetStalledTopLevelAwaitMessage(isolate);
-    if (stalled.size() != 0) {
-      for (auto pair : stalled) {
-        Local<v8::Message> message = std::get<1>(pair);
-
+    auto stalled_messages =
+        std::get<1>(module->GetStalledTopLevelAwaitMessages(isolate));
+    if (stalled_messages.size() != 0) {
+      for (auto& message : stalled_messages) {
         std::string reason = "Error: unexpected top-level await at ";
         std::string info =
             FormatErrorMessage(isolate, context, "", message, true);
@@ -646,14 +660,12 @@ void ModuleWrap::GetNamespaceSync(const FunctionCallbackInfo<Value>& args) {
     case v8::Module::Status::kUninstantiated:
     case v8::Module::Status::kInstantiating:
       return realm->env()->ThrowError(
-          "cannot get namespace, module has not been instantiated");
-    case v8::Module::Status::kEvaluating:
-      return THROW_ERR_REQUIRE_ASYNC_MODULE(realm->env());
+          "Cannot get namespace, module has not been instantiated");
     case v8::Module::Status::kInstantiated:
     case v8::Module::Status::kEvaluated:
     case v8::Module::Status::kErrored:
       break;
-    default:
+    case v8::Module::Status::kEvaluating:
       UNREACHABLE();
   }
 
@@ -879,7 +891,7 @@ void ModuleWrap::HostInitializeImportMetaObjectCallback(
     return;
   }
   DCHECK(id->IsSymbol());
-  Local<Value> args[] = {id, meta};
+  Local<Value> args[] = {id, meta, wrap};
   TryCatchScope try_catch(env);
   USE(callback->Call(
       context, Undefined(realm->isolate()), arraysize(args), args));
