@@ -128,7 +128,7 @@ const isFreeBSD = process.platform === 'freebsd';
 const isOpenBSD = process.platform === 'openbsd';
 const isLinux = process.platform === 'linux';
 const isOSX = process.platform === 'darwin';
-const isAsan = process.env.ASAN !== undefined;
+const isASan = process.config.variables.asan === 1;
 const isPi = (() => {
   try {
     // Normal Raspberry Pi detection is to find the `Raspberry Pi` string in
@@ -146,12 +146,8 @@ const isPi = (() => {
 const isDumbTerminal = process.env.TERM === 'dumb';
 
 // When using high concurrency or in the CI we need much more time for each connection attempt
-const defaultAutoSelectFamilyAttemptTimeout = platformTimeout(2500);
-// Since this is also used by tools outside of the test suite,
-// make sure setDefaultAutoSelectFamilyAttemptTimeout
-if (typeof net.setDefaultAutoSelectFamilyAttemptTimeout === 'function') {
-  net.setDefaultAutoSelectFamilyAttemptTimeout(platformTimeout(defaultAutoSelectFamilyAttemptTimeout));
-}
+net.setDefaultAutoSelectFamilyAttemptTimeout(platformTimeout(net.getDefaultAutoSelectFamilyAttemptTimeout() * 10));
+const defaultAutoSelectFamilyAttemptTimeout = net.getDefaultAutoSelectFamilyAttemptTimeout();
 
 const buildType = process.config.target_defaults ?
   process.config.target_defaults.default_configuration :
@@ -965,7 +961,7 @@ const common = {
   hasMultiLocalhost,
   invalidArgTypeHelper,
   isAlive,
-  isAsan,
+  isASan,
   isDumbTerminal,
   isFreeBSD,
   isLinux,
