@@ -3,7 +3,7 @@
 'use strict'
 
 const { extractBody, mixinBody, cloneBody } = require('./body')
-const { Headers, fill: fillHeaders, HeadersList } = require('./headers')
+const { Headers, fill: fillHeaders, HeadersList, setHeadersGuard, getHeadersGuard, setHeadersList, getHeadersList } = require('./headers')
 const { FinalizationRegistry } = require('./dispatcher-weakref')()
 const util = require('../../core/util')
 const nodeUtil = require('node:util')
@@ -25,10 +25,10 @@ const {
   requestDuplex
 } = require('./constants')
 const { kEnumerableProperty } = util
-const { kHeaders, kSignal, kState, kGuard, kDispatcher } = require('./symbols')
+const { kHeaders, kSignal, kState, kDispatcher } = require('./symbols')
 const { webidl } = require('./webidl')
 const { URLSerializer } = require('./data-url')
-const { kHeadersList, kConstruct } = require('../../core/symbols')
+const { kConstruct } = require('../../core/symbols')
 const assert = require('node:assert')
 const { getMaxListeners, setMaxListeners, getEventListeners, defaultMaxListeners } = require('node:events')
 
@@ -445,8 +445,8 @@ class Request {
     // Realm, whose header list is request’s header list and guard is
     // "request".
     this[kHeaders] = new Headers(kConstruct)
-    this[kHeaders][kHeadersList] = request.headersList
-    this[kHeaders][kGuard] = 'request'
+    setHeadersList(this[kHeaders], request.headersList)
+    setHeadersGuard(this[kHeaders], 'request')
 
     // 31. If this’s request’s mode is "no-cors", then:
     if (mode === 'no-cors') {
@@ -459,13 +459,13 @@ class Request {
       }
 
       // 2. Set this’s headers’s guard to "request-no-cors".
-      this[kHeaders][kGuard] = 'request-no-cors'
+      setHeadersGuard(this[kHeaders], 'request-no-cors')
     }
 
     // 32. If init is not empty, then:
     if (initHasKey) {
       /** @type {HeadersList} */
-      const headersList = this[kHeaders][kHeadersList]
+      const headersList = getHeadersList(this[kHeaders])
       // 1. Let headers be a copy of this’s headers and its associated header
       // list.
       // 2. If init["headers"] exists, then set headers to init["headers"].
@@ -477,9 +477,8 @@ class Request {
       // 4. If headers is a Headers object, then for each header in its header
       // list, append header’s name/header’s value to this’s headers.
       if (headers instanceof HeadersList) {
-        for (const { 0: key, 1: val } of headers) {
-          // Note: The header names are already in lowercase.
-          headersList.append(key, val, true)
+        for (const { name, value } of headers.rawValues()) {
+          headersList.append(name, value, false)
         }
         // Note: Copy the `set-cookie` meta-data.
         headersList.cookies = headers.cookies
@@ -520,7 +519,7 @@ class Request {
       // 3, If Content-Type is non-null and this’s headers’s header list does
       // not contain `Content-Type`, then append `Content-Type`/Content-Type to
       // this’s headers.
-      if (contentType && !this[kHeaders][kHeadersList].contains('content-type', true)) {
+      if (contentType && !getHeadersList(this[kHeaders]).contains('content-type', true)) {
         this[kHeaders].append('content-type', contentType)
       }
     }
@@ -786,7 +785,7 @@ class Request {
     }
 
     // 4. Return clonedRequestObject.
-    return fromInnerRequest(clonedRequest, ac.signal, this[kHeaders][kGuard])
+    return fromInnerRequest(clonedRequest, ac.signal, getHeadersGuard(this[kHeaders]))
   }
 
   [nodeUtil.inspect.custom] (depth, options) {
@@ -820,51 +819,50 @@ class Request {
 
 mixinBody(Request)
 
+// https://fetch.spec.whatwg.org/#requests
 function makeRequest (init) {
-  // https://fetch.spec.whatwg.org/#requests
-  const request = {
-    method: 'GET',
-    localURLsOnly: false,
-    unsafeRequest: false,
-    body: null,
-    client: null,
-    reservedClient: null,
-    replacesClientId: '',
-    window: 'client',
-    keepalive: false,
-    serviceWorkers: 'all',
-    initiator: '',
-    destination: '',
-    priority: null,
-    origin: 'client',
-    policyContainer: 'client',
-    referrer: 'client',
-    referrerPolicy: '',
-    mode: 'no-cors',
-    useCORSPreflightFlag: false,
-    credentials: 'same-origin',
-    useCredentials: false,
-    cache: 'default',
-    redirect: 'follow',
-    integrity: '',
-    cryptoGraphicsNonceMetadata: '',
-    parserMetadata: '',
-    reloadNavigation: false,
-    historyNavigation: false,
-    userActivation: false,
-    taintedOrigin: false,
-    redirectCount: 0,
-    responseTainting: 'basic',
-    preventNoCacheCacheControlHeaderModification: false,
-    done: false,
-    timingAllowFailed: false,
-    ...init,
+  return {
+    method: init.method ?? 'GET',
+    localURLsOnly: init.localURLsOnly ?? false,
+    unsafeRequest: init.unsafeRequest ?? false,
+    body: init.body ?? null,
+    client: init.client ?? null,
+    reservedClient: init.reservedClient ?? null,
+    replacesClientId: init.replacesClientId ?? '',
+    window: init.window ?? 'client',
+    keepalive: init.keepalive ?? false,
+    serviceWorkers: init.serviceWorkers ?? 'all',
+    initiator: init.initiator ?? '',
+    destination: init.destination ?? '',
+    priority: init.priority ?? null,
+    origin: init.origin ?? 'client',
+    policyContainer: init.policyContainer ?? 'client',
+    referrer: init.referrer ?? 'client',
+    referrerPolicy: init.referrerPolicy ?? '',
+    mode: init.mode ?? 'no-cors',
+    useCORSPreflightFlag: init.useCORSPreflightFlag ?? false,
+    credentials: init.credentials ?? 'same-origin',
+    useCredentials: init.useCredentials ?? false,
+    cache: init.cache ?? 'default',
+    redirect: init.redirect ?? 'follow',
+    integrity: init.integrity ?? '',
+    cryptoGraphicsNonceMetadata: init.cryptoGraphicsNonceMetadata ?? '',
+    parserMetadata: init.parserMetadata ?? '',
+    reloadNavigation: init.reloadNavigation ?? false,
+    historyNavigation: init.historyNavigation ?? false,
+    userActivation: init.userActivation ?? false,
+    taintedOrigin: init.taintedOrigin ?? false,
+    redirectCount: init.redirectCount ?? 0,
+    responseTainting: init.responseTainting ?? 'basic',
+    preventNoCacheCacheControlHeaderModification: init.preventNoCacheCacheControlHeaderModification ?? false,
+    done: init.done ?? false,
+    timingAllowFailed: init.timingAllowFailed ?? false,
+    urlList: init.urlList,
+    url: init.urlList[0],
     headersList: init.headersList
       ? new HeadersList(init.headersList)
       : new HeadersList()
   }
-  request.url = request.urlList[0]
-  return request
 }
 
 // https://fetch.spec.whatwg.org/#concept-request-clone
@@ -896,8 +894,8 @@ function fromInnerRequest (innerRequest, signal, guard) {
   request[kState] = innerRequest
   request[kSignal] = signal
   request[kHeaders] = new Headers(kConstruct)
-  request[kHeaders][kHeadersList] = innerRequest.headersList
-  request[kHeaders][kGuard] = guard
+  setHeadersList(request[kHeaders], innerRequest.headersList)
+  setHeadersGuard(request[kHeaders], guard)
   return request
 }
 
