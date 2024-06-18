@@ -39,6 +39,9 @@
 #include "stream_base-inl.h"
 #include "string_bytes.h"
 #include "uv.h"
+#include "v8-fast-api-calls.h"
+
+#include <filesystem>
 
 #if defined(__MINGW32__) || defined(_MSC_VER)
 # include <io.h>
@@ -52,6 +55,8 @@ using v8::Array;
 using v8::BigInt;
 using v8::Context;
 using v8::EscapableHandleScope;
+using v8::FastApiCallbackOptions;
+using v8::FastOneByteString;
 using v8::Function;
 using v8::FunctionCallbackInfo;
 using v8::FunctionTemplate;
@@ -479,7 +484,7 @@ MaybeLocal<Promise> FileHandle::ClosePromise() {
 
 void FileHandle::Close(const FunctionCallbackInfo<Value>& args) {
   FileHandle* fd;
-  ASSIGN_OR_RETURN_UNWRAP(&fd, args.Holder());
+  ASSIGN_OR_RETURN_UNWRAP(&fd, args.This());
   Local<Promise> ret;
   if (!fd->ClosePromise().ToLocal(&ret)) return;
   args.GetReturnValue().Set(ret);
@@ -488,7 +493,7 @@ void FileHandle::Close(const FunctionCallbackInfo<Value>& args) {
 
 void FileHandle::ReleaseFD(const FunctionCallbackInfo<Value>& args) {
   FileHandle* fd;
-  ASSIGN_OR_RETURN_UNWRAP(&fd, args.Holder());
+  ASSIGN_OR_RETURN_UNWRAP(&fd, args.This());
   fd->Release();
 }
 
@@ -1038,6 +1043,33 @@ static void InternalModuleStat(const FunctionCallbackInfo<Value>& args) {
   args.GetReturnValue().Set(rc);
 }
 
+static int32_t FastInternalModuleStat(
+    Local<Object> recv,
+    const FastOneByteString& input,
+    // NOLINTNEXTLINE(runtime/references) This is V8 api.
+    FastApiCallbackOptions& options) {
+  Environment* env = Environment::GetCurrent(recv->GetCreationContextChecked());
+
+  auto path = std::filesystem::path(input.data, input.data + input.length);
+  if (UNLIKELY(!env->permission()->is_granted(
+          env, permission::PermissionScope::kFileSystemRead, path.string()))) {
+    options.fallback = true;
+    return -1;
+  }
+
+  switch (std::filesystem::status(path).type()) {
+    case std::filesystem::file_type::directory:
+      return 1;
+    case std::filesystem::file_type::regular:
+      return 0;
+    default:
+      return -1;
+  }
+}
+
+v8::CFunction fast_internal_module_stat_(
+    v8::CFunction::Make(FastInternalModuleStat));
+
 constexpr bool is_uv_error_except_no_entry(int result) {
   return result < 0 && result != UV_ENOENT;
 }
@@ -1580,7 +1612,7 @@ int MKDirpSync(uv_loop_t* loop,
         // ~FSReqWrapSync():
         case 0:
           req_wrap->continuation_data()->MaybeSetFirstPath(next_path);
-          if (req_wrap->continuation_data()->paths().size() == 0) {
+          if (req_wrap->continuation_data()->paths().empty()) {
             return 0;
           }
           break;
@@ -1596,7 +1628,7 @@ int MKDirpSync(uv_loop_t* loop,
           if (dirname != next_path) {
             req_wrap->continuation_data()->PushPath(std::move(next_path));
             req_wrap->continuation_data()->PushPath(std::move(dirname));
-          } else if (req_wrap->continuation_data()->paths().size() == 0) {
+          } else if (req_wrap->continuation_data()->paths().empty()) {
             err = UV_EEXIST;
             continue;
           }
@@ -1653,7 +1685,7 @@ int MKDirpAsync(uv_loop_t* loop,
         // Note: uv_fs_req_cleanup in terminal paths will be called by
         // FSReqAfterScope::~FSReqAfterScope()
         case 0: {
-          if (req_wrap->continuation_data()->paths().size() == 0) {
+          if (req_wrap->continuation_data()->paths().empty()) {
             req_wrap->continuation_data()->MaybeSetFirstPath(path);
             req_wrap->continuation_data()->Done(0);
           } else {
@@ -1676,7 +1708,7 @@ int MKDirpAsync(uv_loop_t* loop,
           if (dirname != path) {
             req_wrap->continuation_data()->PushPath(path);
             req_wrap->continuation_data()->PushPath(std::move(dirname));
-          } else if (req_wrap->continuation_data()->paths().size() == 0) {
+          } else if (req_wrap->continuation_data()->paths().empty()) {
             err = UV_EEXIST;
             continue;
           }
@@ -3261,7 +3293,11 @@ static void CreatePerIsolateProperties(IsolateData* isolate_data,
   SetMethod(isolate, target, "rmdir", RMDir);
   SetMethod(isolate, target, "mkdir", MKDir);
   SetMethod(isolate, target, "readdir", ReadDir);
-  SetMethod(isolate, target, "internalModuleStat", InternalModuleStat);
+  SetFastMethod(isolate,
+                target,
+                "internalModuleStat",
+                InternalModuleStat,
+                &fast_internal_module_stat_);
   SetMethod(isolate, target, "stat", Stat);
   SetMethod(isolate, target, "lstat", LStat);
   SetMethod(isolate, target, "fstat", FStat);
@@ -3382,6 +3418,8 @@ void RegisterExternalReferences(ExternalReferenceRegistry* registry) {
   registry->Register(MKDir);
   registry->Register(ReadDir);
   registry->Register(InternalModuleStat);
+  registry->Register(FastInternalModuleStat);
+  registry->Register(fast_internal_module_stat_.GetTypeInfo());
   registry->Register(Stat);
   registry->Register(LStat);
   registry->Register(FStat);
