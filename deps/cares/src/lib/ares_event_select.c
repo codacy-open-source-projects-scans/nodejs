@@ -29,8 +29,6 @@
  * anyhow */
 #define FD_SETSIZE 4096
 
-#include "ares_setup.h"
-#include "ares.h"
 #include "ares_private.h"
 #include "ares_event.h"
 #ifdef HAVE_SYS_SELECT_H
@@ -45,7 +43,7 @@ static ares_bool_t ares_evsys_select_init(ares_event_thread_t *e)
 {
   e->ev_signal = ares_pipeevent_create(e);
   if (e->ev_signal == NULL) {
-    return ARES_FALSE;
+    return ARES_FALSE; /* LCOV_EXCL_LINE: UntestablePath */
   }
   return ARES_TRUE;
 }
@@ -118,7 +116,7 @@ static size_t ares_evsys_select_wait(ares_event_thread_t *e,
 
       ev = ares__htable_asvp_get_direct(e->ev_sock_handles, fdlist[i]);
       if (ev == NULL || ev->cb == NULL) {
-        continue;
+        continue; /* LCOV_EXCL_LINE: DefensiveCoding */
       }
 
       if (FD_ISSET(fdlist[i], &read_fds)) {

@@ -2,6 +2,7 @@
 #include "base_object-inl.h"
 #include "env-inl.h"
 #include "memory_tracker-inl.h"
+#include "nbytes.h"
 #include "node.h"
 #include "node_buffer.h"
 #include "node_crypto.h"
@@ -20,14 +21,6 @@
 
 #include <string>
 #include <unordered_map>
-
-// Some OpenSSL 1.1.1 functions unnecessarily operate on and return non-const
-// pointers, whereas the same functions in OpenSSL 3 use const pointers.
-#if OPENSSL_VERSION_MAJOR >= 3
-#define OSSL3_CONST const
-#else
-#define OSSL3_CONST
-#endif
 
 namespace node {
 
@@ -90,10 +83,10 @@ void LogSecret(
   }
 
   std::string line = name;
-  line += " " + StringBytes::hex_encode(reinterpret_cast<const char*>(crandom),
-                                        kTlsClientRandomSize);
-  line += " " + StringBytes::hex_encode(
-      reinterpret_cast<const char*>(secret), secretlen);
+  line += " " + nbytes::HexEncode(reinterpret_cast<const char*>(crandom),
+                                  kTlsClientRandomSize);
+  line +=
+      " " + nbytes::HexEncode(reinterpret_cast<const char*>(secret), secretlen);
   keylog_cb(ssl.get(), line.c_str());
 }
 

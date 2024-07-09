@@ -1,33 +1,48 @@
-## c-ares version 1.30.0 - June 7 2024
+## c-ares version 1.32.1 - July 7 2024
 
-This is a maintenance and bugfix release.
+This is a bugfix release.
+
+Bugfixes:
+* Channel lock needs to be recursive to ensure calls into c-ares functions can
+  be made from callbacks otherwise deadlocks will occur.  This regression was
+  introduced in 1.32.0.
+
+
+## c-ares version 1.32.0 - July 4 2024
+
+This is a feature and bugfix release.
 
 Features:
 
-* Basic support for SIG RR record (RFC 2931 / RFC 2535) [PR #773](https://github.com/c-ares/c-ares/pull/773)
+* Add support for DNS 0x20 to help prevent cache poisoning attacks, enabled
+  by specifying `ARES_FLAG_DNS0x20`.  Disabled by default. [PR #800](https://github.com/c-ares/c-ares/pull/800)
+* Rework query timeout logic to automatically adjust timeouts based on network
+  conditions.  The timeout specified now is only used as a hint until there
+  is enough history to calculate a more valid timeout. [PR #794](https://github.com/c-ares/c-ares/pull/794)
 
 Changes:
 
-* Validation that DNS strings can only consist of printable ascii characters
-  otherwise will trigger a parse failure.
-  [75de16c](https://github.com/c-ares/c-ares/commit/75de16c) and
-  [40fb125](https://github.com/c-ares/c-ares/commit/40fb125)
-* Windows: use `GetTickCount64()` for a monotonic timer that does not wrap. [1dff8f6](https://github.com/c-ares/c-ares/commit/1dff8f6)
+* DNS RR TXT strings should not be automatically concatenated as there are use
+  cases outside of RFC 7208.  In order to maintain ABI compliance, the ability
+  to retrieve TXT strings concatenated is retained as well as a new API to
+  retrieve the individual strings.  This restores behavior from c-ares 1.20.0.
+  [PR #801](https://github.com/c-ares/c-ares/pull/801)
+* Clean up header inclusion logic to make hacking on code easier. [PR #797](https://github.com/c-ares/c-ares/pull/797)
+* GCC/Clang: Enable even more strict warnings to catch more coding flaws. [253bdee](https://github.com/c-ares/c-ares/commit/253bdee)
+* MSVC: Enable `/W4` warning level. [PR #792](https://github.com/c-ares/c-ares/pull/792)
 
 Bugfixes:
 
-* QueryCache: Fix issue where purging on server changes wasn't working. [a6c8fe6](https://github.com/c-ares/c-ares/commit/a6c8fe6)
-* Windows: Fix Y2K38 issue by creating our own `ares_timeval_t` datatype. [PR #772](https://github.com/c-ares/c-ares/pull/772)
-* Fix packaging issue affecting MacOS due to a missing header. [55afad6](https://github.com/c-ares/c-ares/commit/55afad6)
-* MacOS: Fix UBSAN warnings that are likely meaningless due to alignment issues
-  in new MacOS config reader.
-* Android: arm 32bit build failure due to missing symbol. [d1722e6](https://github.com/c-ares/c-ares/commit/d1722e6)
+* Tests: Fix thread race condition in test cases for EventThread. [PR #803](https://github.com/c-ares/c-ares/pull/803)
+* Windows: Fix building with UNICODE. [PR #802](https://github.com/c-ares/c-ares/pull/802)
+* Thread Saftey: `ares_timeout()` was missing lock. [74a64e4](https://github.com/c-ares/c-ares/commit/74a64e4)
+* Fix building with DJGPP (32bit protected mode DOS). [PR #789](https://github.com/c-ares/c-ares/pull/789)
 
 Thanks go to these friendly people for their efforts and contributions for this
 release:
 
 * Brad House (@bradh352)
-* Daniel Stenberg (@bagder)
+* Cheng (@zcbenz)
 
 
 

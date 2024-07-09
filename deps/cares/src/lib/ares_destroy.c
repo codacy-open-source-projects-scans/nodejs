@@ -25,13 +25,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include "ares_setup.h"
-
-#include <assert.h>
-
-#include "ares.h"
 #include "ares_private.h"
 #include "ares_event.h"
+#include <assert.h>
 
 void ares_destroy(ares_channel_t *channel)
 {
@@ -129,7 +125,7 @@ void ares_destroy(ares_channel_t *channel)
 void ares__destroy_server(struct server_state *server)
 {
   if (server == NULL) {
-    return;
+    return; /* LCOV_EXCL_LINE: DefensiveCoding */
   }
 
   ares__close_sockets(server);
