@@ -1438,7 +1438,9 @@ def configure_node(o):
     o['variables']['node_use_node_snapshot'] = b(
       not cross_compiling and not options.shared)
 
-  if options.without_node_code_cache or options.without_node_snapshot or options.node_builtin_modules_path:
+  # Do not use code cache when Node.js is built for collecting coverage of itself, this allows more
+  # precise coverage for the JS built-ins.
+  if options.without_node_code_cache or options.without_node_snapshot or options.node_builtin_modules_path or options.coverage:
     o['variables']['node_use_node_code_cache'] = 'false'
   else:
     # TODO(refack): fix this when implementing embedded code-cache when cross-compiling.
@@ -1669,7 +1671,7 @@ def configure_v8(o, configs):
     o['variables']['v8_enable_short_builtin_calls'] = 1
   if options.v8_enable_snapshot_compression:
     o['variables']['v8_enable_snapshot_compression'] = 1
-  if options.v8_enable_object_print and options.v8_disable_object_print:
+  if all(opt in sys.argv for opt in ['--v8-enable-object-print', '--v8-disable-object-print']):
     raise Exception(
         'Only one of the --v8-enable-object-print or --v8-disable-object-print options '
         'can be specified at a time.')
