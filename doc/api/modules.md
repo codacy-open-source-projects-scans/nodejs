@@ -170,15 +170,18 @@ relative, and based on the real path of the files making the calls to
 
 ## Loading ECMAScript modules using `require()`
 
+<!-- YAML
+changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/55085
+    description: require() now supports loading synchronous ES modules by default.
+-->
+
 The `.mjs` extension is reserved for [ECMAScript Modules][].
-Currently, if the flag `--experimental-require-module` is not used, loading
-an ECMAScript module using `require()` will throw a [`ERR_REQUIRE_ESM`][]
-error, and users need to use [`import()`][] instead. See
-[Determining module system][] section for more info
+See [Determining module system][] section for more info
 regarding which files are parsed as ECMAScript modules.
 
-If `--experimental-require-module` is enabled, and the ECMAScript module being
-loaded by `require()` meets the following requirements:
+`require()` only supports loading ECMAScript modules that meet the following requirements:
 
 * The module is fully synchronous (contains no top-level `await`); and
 * One of these conditions are met:
@@ -187,8 +190,8 @@ loaded by `require()` meets the following requirements:
   3. The file has a `.js` extension, the closest `package.json` does not contain
      `"type": "commonjs"`, and the module contains ES module syntax.
 
-`require()` will load the requested module as an ES Module, and return
-the module namespace object. In this case it is similar to dynamic
+If the ES Module being loaded meet the requirements, `require()` can load it and
+return the module namespace object. In this case it is similar to dynamic
 `import()` but is run synchronously and returns the name space object
 directly.
 
@@ -207,7 +210,7 @@ class Point {
 export default Point;
 ```
 
-A CommonJS module can load them with `require()` under `--experimental-detect-module`:
+A CommonJS module can load them with `require()`:
 
 ```cjs
 const distance = require('./distance.mjs');
@@ -236,12 +239,18 @@ conventions. Code authored directly in CommonJS should avoid depending on it.
 If the module being `require()`'d contains top-level `await`, or the module
 graph it `import`s contains top-level `await`,
 [`ERR_REQUIRE_ASYNC_MODULE`][] will be thrown. In this case, users should
-load the asynchronous module using `import()`.
+load the asynchronous module using [`import()`][].
 
 If `--experimental-print-required-tla` is enabled, instead of throwing
 `ERR_REQUIRE_ASYNC_MODULE` before evaluation, Node.js will evaluate the
 module, try to locate the top-level awaits, and print their location to
 help users fix them.
+
+Support for loading ES modules using `require()` is currently
+experimental and can be disabled using `--no-experimental-require-module`.
+When `require()` actually encounters an ES module for the
+first time in the process, it will emit an experimental warning. The
+warning is expected to be removed when this feature stablizes.
 
 ## All together
 
@@ -272,8 +281,7 @@ require(X) from module at path Y
 
 MAYBE_DETECT_AND_LOAD(X)
 1. If X parses as a CommonJS module, load X as a CommonJS module. STOP.
-2. Else, if `--experimental-require-module` is
-  enabled, and the source code of X can be parsed as ECMAScript module using
+2. Else, if the source code of X can be parsed as ECMAScript module using
   <a href="esm.md#resolver-algorithm-specification">DETECT_MODULE_SYNTAX defined in
   the ESM resolver</a>,
   a. Load X as an ECMAScript module. STOP.
@@ -325,7 +333,7 @@ NODE_MODULES_PATHS(START)
 2. let I = count of PARTS - 1
 3. let DIRS = []
 4. while I >= 0,
-   a. if PARTS[I] = "node_modules" CONTINUE
+   a. if PARTS[I] = "node_modules", GOTO d.
    b. DIR = path join(PARTS[0 .. I] + "node_modules")
    c. DIRS = DIR + DIRS
    d. let I = I - 1
@@ -335,9 +343,12 @@ LOAD_PACKAGE_IMPORTS(X, DIR)
 1. Find the closest package scope SCOPE to DIR.
 2. If no scope was found, return.
 3. If the SCOPE/package.json "imports" is null or undefined, return.
-4. let MATCH = PACKAGE_IMPORTS_RESOLVE(X, pathToFileURL(SCOPE),
-  ["node", "require"]) <a href="esm.md#resolver-algorithm-specification">defined in the ESM resolver</a>.
-5. RESOLVE_ESM_MATCH(MATCH).
+4. If `--experimental-require-module` is enabled
+  a. let CONDITIONS = ["node", "require", "module-sync"]
+  b. Else, let CONDITIONS = ["node", "require"]
+5. let MATCH = PACKAGE_IMPORTS_RESOLVE(X, pathToFileURL(SCOPE),
+  CONDITIONS) <a href="esm.md#resolver-algorithm-specification">defined in the ESM resolver</a>.
+6. RESOLVE_ESM_MATCH(MATCH).
 
 LOAD_PACKAGE_EXPORTS(X, DIR)
 1. Try to interpret X as a combination of NAME and SUBPATH where the name
@@ -346,9 +357,12 @@ LOAD_PACKAGE_EXPORTS(X, DIR)
    return.
 3. Parse DIR/NAME/package.json, and look for "exports" field.
 4. If "exports" is null or undefined, return.
-5. let MATCH = PACKAGE_EXPORTS_RESOLVE(pathToFileURL(DIR/NAME), "." + SUBPATH,
-   `package.json` "exports", ["node", "require"]) <a href="esm.md#resolver-algorithm-specification">defined in the ESM resolver</a>.
-6. RESOLVE_ESM_MATCH(MATCH)
+5. If `--experimental-require-module` is enabled
+  a. let CONDITIONS = ["node", "require", "module-sync"]
+  b. Else, let CONDITIONS = ["node", "require"]
+6. let MATCH = PACKAGE_EXPORTS_RESOLVE(pathToFileURL(DIR/NAME), "." + SUBPATH,
+   `package.json` "exports", CONDITIONS) <a href="esm.md#resolver-algorithm-specification">defined in the ESM resolver</a>.
+7. RESOLVE_ESM_MATCH(MATCH)
 
 LOAD_PACKAGE_SELF(X, DIR)
 1. Find the closest package scope SCOPE to DIR.
@@ -1184,7 +1198,6 @@ This section was moved to
 [`"main"`]: packages.md#main
 [`"type"`]: packages.md#type
 [`ERR_REQUIRE_ASYNC_MODULE`]: errors.md#err_require_async_module
-[`ERR_REQUIRE_ESM`]: errors.md#err_require_esm
 [`ERR_UNSUPPORTED_DIR_IMPORT`]: errors.md#err_unsupported_dir_import
 [`MODULE_NOT_FOUND`]: errors.md#module_not_found
 [`__dirname`]: #__dirname
