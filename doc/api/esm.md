@@ -8,6 +8,15 @@
 added: v8.5.0
 changes:
   - version:
+    - v23.1.0
+    - v22.12.0
+    - v18.20.5
+    pr-url: https://github.com/nodejs/node/pull/55333
+    description: Import attributes are no longer experimental.
+  - version: v22.0.0
+    pr-url: https://github.com/nodejs/node/pull/52104
+    description: Drop support for import assertions.
+  - version:
     - v21.0.0
     - v20.10.0
     - v18.20.0
@@ -116,14 +125,13 @@ Node.js has two module systems: [CommonJS][] modules and ECMAScript modules.
 
 Authors can tell Node.js to interpret JavaScript as an ES module via the `.mjs`
 file extension, the `package.json` [`"type"`][] field with a value `"module"`,
-the [`--input-type`][] flag with a value of `"module"`, or the
-[`--experimental-default-type`][] flag with a value of `"module"`. These are
-explicit markers of code being intended to run as an ES module.
+or the [`--input-type`][] flag with a value of `"module"`. These are explicit
+markers of code being intended to run as an ES module.
 
-Inversely, authors can tell Node.js to interpret JavaScript as CommonJS via the
-`.cjs` file extension, the `package.json` [`"type"`][] field with a value
-`"commonjs"`, the [`--input-type`][] flag with a value of `"commonjs"`, or the
-[`--experimental-default-type`][] flag with a value of `"commonjs"`.
+Inversely, authors can explicitly tell Node.js to interpret JavaScript as
+CommonJS via the `.cjs` file extension, the `package.json` [`"type"`][] field
+with a value `"commonjs"`, or the [`--input-type`][] flag with a value of
+`"commonjs"`.
 
 When code lacks explicit markers for either module system, Node.js will inspect
 the source code of a module to look for ES module syntax. If such syntax is
@@ -335,7 +343,7 @@ modules it can be used to load ES modules.
 * {Object}
 
 The `import.meta` meta property is an `Object` that contains the following
-properties.
+properties. It is only supported in ES modules.
 
 ### `import.meta.dirname`
 
@@ -395,8 +403,8 @@ changes:
     - v20.6.0
     - v18.19.0
     pr-url: https://github.com/nodejs/node/pull/49028
-    description: Unflag `import.meta.resolve`, with `parentURL` parameter still
-                 flagged.
+    description: No longer behind `--experimental-import-meta-resolve` CLI flag,
+                 except for the non-standard `parentURL` parameter.
   - version:
     - v20.6.0
     - v18.19.0
@@ -503,7 +511,7 @@ module default import or its corresponding sugar syntax:
 
 ```js
 import { default as cjs } from 'cjs';
-// identical to the above
+// Identical to the above
 import cjsSugar from 'cjs';
 
 console.log(cjs);
@@ -627,6 +635,16 @@ separate cache.
 <i id="esm_experimental_json_modules"></i>
 
 ## JSON modules
+
+<!-- YAML
+changes:
+  - version:
+    - v23.1.0
+    - v22.12.0
+    - v18.20.5
+    pr-url: https://github.com/nodejs/node/pull/55333
+    description: JSON modules are no longer experimental.
+-->
 
 > Stability: 2 - Stable
 
@@ -1107,7 +1125,6 @@ resolution for ESM specifiers is [commonjs-extension-resolution-loader][].
 [URL]: https://url.spec.whatwg.org/
 [`"exports"`]: packages.md#exports
 [`"type"`]: packages.md#type
-[`--experimental-default-type`]: cli.md#--experimental-default-typetype
 [`--input-type`]: cli.md#--input-typetype
 [`data:` URLs]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/Data_URIs
 [`export`]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/export

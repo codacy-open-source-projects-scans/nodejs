@@ -113,13 +113,6 @@ void EnvironmentOptions::CheckOptions(std::vector<std::string>* errors,
     }
   }
 
-  if (!type.empty()) {
-    if (type != "commonjs" && type != "module") {
-      errors->push_back("--experimental-default-type must be "
-                        "\"module\" or \"commonjs\"");
-    }
-  }
-
   if (syntax_check_only && has_eval_string) {
     errors->push_back("either --check or --eval can be used, not both");
   }
@@ -140,6 +133,11 @@ void EnvironmentOptions::CheckOptions(std::vector<std::string>* errors,
 
   if (heap_snapshot_near_heap_limit < 0) {
     errors->push_back("--heapsnapshot-near-heap-limit must not be negative");
+  }
+
+  if (!trace_require_module.empty() && trace_require_module != "all" &&
+      trace_require_module != "no-node-modules") {
+    errors->push_back("invalid value for --trace-require-module");
   }
 
   if (test_runner) {
@@ -427,7 +425,8 @@ EnvironmentOptionsParser::EnvironmentOptionsParser() {
   AddOption("--experimental-sqlite",
             "experimental node:sqlite module",
             &EnvironmentOptions::experimental_sqlite,
-            kAllowedInEnvvar);
+            kAllowedInEnvvar,
+            true);
   AddOption("--experimental-webstorage",
             "experimental Web Storage API",
             &EnvironmentOptions::experimental_webstorage,
@@ -457,11 +456,12 @@ EnvironmentOptionsParser::EnvironmentOptionsParser() {
             "experimental ES Module import.meta.resolve() parentURL support",
             &EnvironmentOptions::experimental_import_meta_resolve,
             kAllowedInEnvvar);
-  AddOption("--experimental-permission",
+  AddOption("--permission",
             "enable the permission system",
-            &EnvironmentOptions::experimental_permission,
+            &EnvironmentOptions::permission,
             kAllowedInEnvvar,
             false);
+  AddAlias("--experimental-permission", "--permission");
   AddOption("--allow-fs-read",
             "allow permissions to read the filesystem",
             &EnvironmentOptions::allow_fs_read,
@@ -500,10 +500,11 @@ EnvironmentOptionsParser::EnvironmentOptionsParser() {
   AddOption(
       "--experimental-wasi-unstable-preview1", "", NoOp{}, kAllowedInEnvvar);
   AddOption("--expose-gc", "expose gc extension", V8Option{}, kAllowedInEnvvar);
-  AddOption("--experimental-async-context-frame",
+  AddOption("--async-context-frame",
             "Improve AsyncLocalStorage performance with AsyncContextFrame",
             &EnvironmentOptions::async_context_frame,
-            kAllowedInEnvvar);
+            kAllowedInEnvvar,
+            true);
   AddOption("--expose-internals", "", &EnvironmentOptions::expose_internals);
   AddOption("--frozen-intrinsics",
             "experimental frozen intrinsics support",
@@ -690,9 +691,7 @@ EnvironmentOptionsParser::EnvironmentOptionsParser() {
   AddOption("--experimental-test-module-mocks",
             "enable module mocking in the test runner",
             &EnvironmentOptions::test_runner_module_mocks);
-  AddOption("--experimental-test-snapshots",
-            "enable snapshot testing in the test runner",
-            &EnvironmentOptions::test_runner_snapshots);
+  AddOption("--experimental-test-snapshots", "", NoOp{});
   AddOption("--test-name-pattern",
             "run tests whose name matches this regular expression",
             &EnvironmentOptions::test_name_pattern,
@@ -760,10 +759,31 @@ EnvironmentOptionsParser::EnvironmentOptionsParser() {
             "show stack traces on promise initialization and resolution",
             &EnvironmentOptions::trace_promises,
             kAllowedInEnvvar);
-  AddOption("--experimental-default-type",
-            "set module system to use by default",
-            &EnvironmentOptions::type,
+
+  AddOption("--trace-env",
+            "Print accesses to the environment variables",
+            &EnvironmentOptions::trace_env,
             kAllowedInEnvvar);
+  Implies("--trace-env-js-stack", "--trace-env");
+  Implies("--trace-env-native-stack", "--trace-env");
+  AddOption("--trace-env-js-stack",
+            "Print accesses to the environment variables and the JavaScript "
+            "stack trace",
+            &EnvironmentOptions::trace_env_js_stack,
+            kAllowedInEnvvar);
+  AddOption(
+      "--trace-env-native-stack",
+      "Print accesses to the environment variables and the native stack trace",
+      &EnvironmentOptions::trace_env_native_stack,
+      kAllowedInEnvvar);
+
+  AddOption(
+      "--trace-require-module",
+      "Print access to require(esm). Options are 'all' (print all usage) and "
+      "'no-node-modules' (excluding usage from the node_modules folder)",
+      &EnvironmentOptions::trace_require_module,
+      kAllowedInEnvvar);
+
   AddOption("--extra-info-on-fatal-exception",
             "hide extra information on fatal exception that causes exit",
             &EnvironmentOptions::extra_info_on_fatal_exception,
@@ -877,6 +897,11 @@ EnvironmentOptionsParser::EnvironmentOptionsParser() {
             &EnvironmentOptions::tls_max_v1_3,
             kAllowedInEnvvar);
 
+  AddOption("--report-exclude-env",
+            "Exclude environment variables when generating report"
+            " (default: false)",
+            &EnvironmentOptions::report_exclude_env,
+            kAllowedInEnvvar);
   AddOption("--report-exclude-network",
             "exclude network interface diagnostics."
             " (default: false)",
