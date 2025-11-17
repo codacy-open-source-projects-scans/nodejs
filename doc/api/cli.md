@@ -1745,10 +1745,11 @@ surface on other platforms, but the performance impact may be severe.
 added: v22.4.0
 -->
 
+> Stability: 1.2 - Release candidate.
+
 The file used to store `localStorage` data. If the file does not exist, it is
 created the first time `localStorage` is accessed. The same file may be shared
-between multiple Node.js processes concurrently. This flag is a no-op if
-Node.js is started with the `--no-webstorage` (or `--no-experimental-webstorage`) flag.
+between multiple Node.js processes concurrently.
 
 ### `--max-http-header-size=size`
 
@@ -1910,6 +1911,20 @@ added: v22.0.0
 
 Disable exposition of {WebSocket} on the global scope.
 
+### `--no-experimental-webstorage`
+
+<!-- YAML
+added: v22.4.0
+changes:
+  - version: v25.0.0
+    pr-url: https://github.com/nodejs/node/pull/57666
+    description: The feature is now enabled by default.
+-->
+
+> Stability: 1.2 - Release candidate.
+
+Disable [`Web Storage`][] support.
+
 ### `--no-extra-info-on-fatal-exception`
 
 <!-- YAML
@@ -1956,9 +1971,10 @@ enables it.
 <!-- YAML
 added: v22.6.0
 changes:
-  - version: REPLACEME
+  - version: v25.2.0
     pr-url: https://github.com/nodejs/node/pull/60600
-    description: Type stripping is now stable.
+    description: Type stripping is now stable, the flag was renamed from
+                 `--no-experimental-strip-types` to `--no-strip-types`.
   - version:
       - v23.6.0
       - v22.18.0
@@ -1976,14 +1992,6 @@ added: v6.0.0
 -->
 
 Silence all process warnings (including deprecations).
-
-### `--no-webstorage`
-
-<!-- YAML
-added: v25.0.0
--->
-
-Disable [`Web Storage`][] support.
 
 ### `--node-memory-debug`
 
