@@ -357,6 +357,28 @@ shared_optgroup.add_argument('--shared-libuv-libpath',
     dest='shared_libuv_libpath',
     help='a directory to search for the shared libuv DLL')
 
+shared_optgroup.add_argument('--shared-nbytes',
+    action='store_true',
+    dest='shared_nbytes',
+    default=None,
+    help='link to a shared nbytes DLL instead of static linking')
+
+shared_optgroup.add_argument('--shared-nbytes-includes',
+    action='store',
+    dest='shared_nbytes_includes',
+    help='directory containing nbytes header files')
+
+shared_optgroup.add_argument('--shared-nbytes-libname',
+    action='store',
+    dest='shared_nbytes_libname',
+    default='nbytes',
+    help='alternative lib name to link to [default: %(default)s]')
+
+shared_optgroup.add_argument('--shared-nbytes-libpath',
+    action='store',
+    dest='shared_nbytes_libpath',
+    help='a directory to search for the shared nbytes DLL')
+
 shared_optgroup.add_argument('--shared-nghttp2',
     action='store_true',
     dest='shared_nghttp2',
@@ -1864,11 +1886,6 @@ def configure_library(lib, output, pkgname=None):
       output['libraries'] += pkg_libs.split()
 
 
-def configure_rust(o, configs):
-  set_configuration_variable(configs, 'cargo_build_mode', release='release', debug='debug')
-  set_configuration_variable(configs, 'cargo_build_flags', release=['--release'], debug=[])
-
-
 def configure_v8(o, configs):
   set_configuration_variable(configs, 'v8_enable_v8_checks', release=1, debug=0)
 
@@ -2387,7 +2404,7 @@ def make_bin_override():
   if sys.platform == 'win32':
     raise Exception('make_bin_override should not be called on win32.')
   # If the system python is not the python we are running (which should be
-  # python 3.9+), then create a directory with a symlink called `python` to our
+  # python 3.10+), then create a directory with a symlink called `python` to our
   # sys.executable. This directory will be prefixed to the PATH, so that
   # other tools that shell out to `python` will use the appropriate python
 
@@ -2455,6 +2472,7 @@ configure_library('brotli', output, pkgname=['libbrotlidec', 'libbrotlienc'])
 configure_library('cares', output, pkgname='libcares')
 configure_library('gtest', output)
 configure_library('hdr_histogram', output)
+configure_library('nbytes', output)
 configure_library('nghttp2', output, pkgname='libnghttp2')
 configure_library('nghttp3', output, pkgname='libnghttp3')
 configure_library('ngtcp2', output, pkgname='libngtcp2')
@@ -2468,7 +2486,6 @@ configure_intl(output)
 configure_static(output)
 configure_inspector(output)
 configure_section_file(output)
-configure_rust(output, configurations)
 
 # remove builtins that have been disabled
 if options.without_amaro:

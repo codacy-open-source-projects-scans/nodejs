@@ -11,7 +11,7 @@ if /i "%arg:~-4%"=="help" goto help
 cd %~dp0
 
 set JS_SUITES=default
-set NATIVE_SUITES=addons js-native-api node-api
+set NATIVE_SUITES=addons js-native-api node-api embedding
 @rem CI_* variables should be kept synchronized with the ones in Makefile
 set "CI_NATIVE_SUITES=%NATIVE_SUITES% benchmark"
 set "CI_JS_SUITES=%JS_SUITES% pummel"
@@ -736,9 +736,6 @@ if not exist "%config%\cctest.exe" echo cctest.exe not found. Run "vcbuild test"
 echo running 'cctest %cctest_args%'
 "%config%\cctest" %cctest_args%
 if %errorlevel% neq 0 set exit_code=%errorlevel%
-echo running '%node_exe% test\embedding\test-embedding.js'
-"%node_exe%" test\embedding\test-embedding.js
-if %errorlevel% neq 0 set exit_code=%errorlevel%
 :run-test-py
 echo running 'python tools\test.py %test_args%'
 python tools\test.py %test_args%
@@ -752,7 +749,7 @@ if errorlevel 1 goto exit
 goto lint-cpp
 
 :lint-cpp
-if not defined lint_cpp goto lint-js
+if not defined lint_cpp goto lint-js-build
 if defined NODEJS_MAKE goto run-make-lint
 where make > NUL 2>&1 && make -v | findstr /C:"GNU Make" 1> NUL
 if "%ERRORLEVEL%"=="0" set "NODEJS_MAKE=make PYTHON=python" & goto run-make-lint
@@ -760,7 +757,7 @@ where wsl > NUL 2>&1
 if "%ERRORLEVEL%"=="0" set "NODEJS_MAKE=wsl make" & goto run-make-lint
 echo Could not find GNU Make, needed for linting C/C++
 echo Alternatively, you can use WSL
-goto lint-js
+goto lint-js-build
 
 :run-make-lint
 %NODEJS_MAKE% lint-cpp
