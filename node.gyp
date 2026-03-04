@@ -133,6 +133,7 @@
       'src/node_main_instance.cc',
       'src/node_messaging.cc',
       'src/node_metadata.cc',
+      'src/node_diagnostics_channel.cc',
       'src/node_modules.cc',
       'src/node_options.cc',
       'src/node_os.cc',
@@ -270,6 +271,7 @@
       'src/node_messaging.h',
       'src/node_metadata.h',
       'src/node_mutex.h',
+      'src/node_diagnostics_channel.h',
       'src/node_modules.h',
       'src/node_object_wrap.h',
       'src/node_options.h',
@@ -893,7 +895,6 @@
         '<(SHARED_INTERMEDIATE_DIR)' # for node_natives.h
       ],
       'dependencies': [
-        'tools/v8_gypfiles/abseil.gyp:abseil',
         'node_js2c#host',
       ],
 
@@ -953,6 +954,9 @@
           'sources': [
             'src/node_snapshot_stub.cc',
           ]
+        }],
+        [ 'node_use_bundled_v8!="false"', {
+          'dependencies': [ 'tools/v8_gypfiles/abseil.gyp:abseil' ],
         }],
         [ 'node_shared_gtest=="false"', {
           'dependencies': [
@@ -1274,7 +1278,6 @@
 
       'dependencies': [
         '<(node_lib_target_name)',
-        'tools/v8_gypfiles/abseil.gyp:abseil',
       ],
 
       'includes': [
@@ -1307,6 +1310,9 @@
         }],
         [ 'node_shared_gtest=="true"', {
           'libraries': [ '-lgtest_main' ],
+        }],
+        [ 'node_use_bundled_v8!="false"', {
+          'dependencies': [ 'tools/v8_gypfiles/abseil.gyp:abseil' ],
         }],
         [ 'node_shared_hdr_histogram=="false"', {
           'dependencies': [
@@ -1546,7 +1552,7 @@
         [ 'OS=="mac"', {
           'libraries': [ '-framework CoreFoundation -framework Security' ],
         }],
-        [ 'node_shared_simdutf=="false"', {
+        [ 'node_shared_simdutf=="false" and node_use_bundled_v8!="false"', {
           'dependencies': [ 'tools/v8_gypfiles/v8.gyp:simdutf#host' ],
         }],
         [ 'node_shared_libuv=="false"', {

@@ -1315,17 +1315,6 @@ Enable module mocking in the test runner.
 
 This feature requires `--allow-worker` if used with the [Permission Model][].
 
-### `--experimental-transform-types`
-
-<!-- YAML
-added: v22.7.0
--->
-
-> Stability: 1.2 - Release candidate
-
-Enables the transformation of TypeScript-only syntax into JavaScript code.
-Implies `--enable-source-maps`.
-
 ### `--experimental-vm-modules`
 
 <!-- YAML
@@ -2173,6 +2162,16 @@ following permissions are restricted:
 * Worker Threads - manageable through [`--allow-worker`][] flag
 * WASI - manageable through [`--allow-wasi`][] flag
 * Addons - manageable through [`--allow-addons`][] flag
+
+### `--permission-audit`
+
+<!-- YAML
+added: v25.8.0
+-->
+
+Enable audit only for the permission model. When enabled, permission checks
+are performed but access is not denied. Instead, a warning is emitted for
+each permission violation via diagnostics channel.
 
 ### `--preserve-symlinks`
 
@@ -3611,7 +3610,6 @@ one is included in the list below.
 * `--experimental-specifier-resolution`
 * `--experimental-test-isolation`
 * `--experimental-top-level-await`
-* `--experimental-transform-types`
 * `--experimental-vm-modules`
 * `--experimental-wasi-unstable-preview1`
 * `--force-context-aware`
@@ -3660,6 +3658,7 @@ one is included in the list below.
 * `--openssl-legacy-provider`
 * `--openssl-shared-config`
 * `--pending-deprecation`
+* `--permission-audit`
 * `--permission`
 * `--preserve-symlinks-main`
 * `--preserve-symlinks`
@@ -3743,6 +3742,7 @@ V8 options that are allowed are:
 * `--expose-gc`
 * `--interpreted-frames-native-stack`
 * `--jitless`
+* `--max-heap-size`
 * `--max-old-space-size`
 * `--max-semi-space-size`
 * `--perf-basic-prof-only-functions`
@@ -4102,6 +4102,12 @@ documented here:
 ### `--interpreted-frames-native-stack`
 
 ### `--jitless`
+
+### `--max-heap-size`
+
+Specifies the maximum heap size (in megabytes) for the process.
+
+This option is typically used to limit the amount of memory the process can use for its JavaScript heap.
 
 <!-- Anchor to make sure old links find a target -->
 
