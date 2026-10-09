@@ -3,13 +3,13 @@
 <!--introduced_in=v0.10.0-->
 
 * [About this documentation](documentation.md)
-* [Usage and example](synopsis.md)
 
 <hr class="line"/>
 
 * [Assertion testing](assert.md)
 * [Asynchronous context tracking](async_context.md)
 * [Async hooks](async_hooks.md)
+* [Benchmark runner](bench.md)
 * [Buffer](buffer.md)
 * [C++ addons](addons.md)
 * [C/C++ addons with Node-API](n-api.md)
@@ -35,13 +35,13 @@
 * [HTTPS](https.md)
 * [Inspector](inspector.md)
 * [Internationalization](intl.md)
+* [Iterable Streams API](stream_iter.md)
 * [Modules: CommonJS modules](modules.md)
 * [Modules: ECMAScript modules](esm.md)
 * [Modules: `node:module` API](module.md)
 * [Modules: Packages](packages.md)
 * [Modules: TypeScript](typescript.md)
 * [Net](net.md)
-* [Iterable Streams API](stream_iter.md)
 * [OS](os.md)
 * [Path](path.md)
 * [Performance hooks](perf_hooks.md)
@@ -65,13 +65,13 @@
 * [URL](url.md)
 * [Utilities](util.md)
 * [V8](v8.md)
+* [Virtual File System](vfs.md)
 * [VM](vm.md)
 * [WASI](wasi.md)
 * [Web Crypto API](webcrypto.md)
 * [Web Streams API](webstreams.md)
 * [Worker threads](worker_threads.md)
 * [Zlib](zlib.md)
-* [Zlib Iterable Compression](zlib_iter.md)
 
 <hr class="line"/>
 

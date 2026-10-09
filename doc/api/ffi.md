@@ -1,9 +1,9 @@
 # FFI
 
-<!--introduced_in=REPLACEME-->
+<!--introduced_in=v26.1.0-->
 
 <!-- YAML
-added: REPLACEME
+added: v26.1.0
 -->
 
 > Stability: 1 - Experimental
@@ -28,17 +28,19 @@ const ffi = require('node:ffi');
 ```
 
 This module is only available under the `node:` scheme in builds with FFI
-support and is gated by the `--experimental-ffi` flag.
+support. It can be disabled with the `--no-experimental-ffi` flag.
 
-Bundled libffi support currently targets:
+Building Node.js with `node:ffi` support is available via the bundled `libffi` on
+platforms where `libffi` provides a compatible static backend, or via a
+shared `libffi` using the `--shared-ffi` configure flag.
+The unofficial GN build does not support `node:ffi`.
 
-* macOS on `arm64` and `x64`
-* Windows on `arm64` and `x64`
-* FreeBSD on `arm`, `arm64`, and `x64`
-* Linux on `arm`, `arm64`, and `x64`
+The following targets are not supported by bundled libffi:
 
-Other targets require building Node.js against a shared libffi with
-`--shared-ffi`. The unofficial GN build does not support `node:ffi`.
+* `s390x`.
+* `mips`, `mipsel`, and `mips64el` on targets other than FreeBSD, Linux, and
+  OpenBSD.
+* `ppc64` on Android, CloudABI, iOS, OpenHarmony, OS/400, Solaris, and Windows.
 
 When using the [Permission Model][], FFI APIs are
 restricted unless the [`--allow-ffi`][] flag is provided.
@@ -60,21 +62,40 @@ FFI signatures use string type names.
 Supported type names:
 
 * `void`
-* `i8`, `int8`
-* `u8`, `uint8`, `bool`, `char`
-* `i16`, `int16`
-* `u16`, `uint16`
-* `i32`, `int32`
-* `u32`, `uint32`
-* `i64`, `int64`
-* `u64`, `uint64`
-* `f32`, `float`
-* `f64`, `double`
-* `pointer`, `ptr`
-* `string`, `str`
+* `char`
+* `int8`
+* `uint8`
+* `int16`
+* `uint16`
+* `int32`
+* `uint32`
+* `int64`
+* `uint64`
+* `float32`
+* `float64`
+* `pointer`
+* `string`
 * `buffer`
 * `arraybuffer`
 * `function`
+
+<details>
+<summary>Alternative spellings</summary>
+
+* `i8` for `int8`
+* `u8` and `bool` for `uint8`
+* `i16` for `int16`
+* `u16` for `uint16`
+* `i32` for `int32`
+* `u32` for `uint32`
+* `i64` for `int64`
+* `u64` for `uint64`
+* `f32` and `float` for `float32`
+* `f64` and `double` for `float64`
+* `ptr` for `pointer`
+* `str` for `string`
+
+</details>
 
 These type names are also exposed as constants on `ffi.types`:
 
@@ -113,34 +134,60 @@ through reentrant JavaScript such as FFI callbacks. Doing so may crash the
 process, produce incorrect output, or corrupt memory.
 
 The `char` type follows the platform C ABI. On platforms where plain C `char`
-is signed it behaves like `i8`; otherwise it behaves like `u8`.
+is signed it behaves like `int8`; otherwise it behaves like `uint8`.
 
 The `bool` type is marshaled as an 8-bit unsigned integer. Pass numeric values
 such as `0` and `1`; JavaScript `true` and `false` are not accepted.
+
+On optimized Fast FFI calls, `pointer` and `function` parameters accept raw
+pointer `bigint` values. For pointer-like parameters, `null`, `undefined`,
+strings, `Buffer`, typed array, `DataView`, and `ArrayBuffer` values are converted
+on the JavaScript side before calling the optimized native wrapper.
+
+Optimized Fast FFI calls fall back to another [call path][call paths] when a
+function's arguments or return type do not fit the platform-specific fast
+trampoline. Fast FFI calls support at most 8 total arguments, and the
+register and argument limits differ per architecture:
+
+| Architecture               | Max integer/pointer args                  | Max floating-point args | Buffer-shaped args | Buffer-shaped + FP together | Narrow (8/16-bit) return |
+| -------------------------- | ----------------------------------------- | ----------------------- | ------------------ | --------------------------- | ------------------------ |
+| AArch64                    | 7 (6 when a buffer-shaped arg is present) | 8                       | Supported          | Not supported               | Supported                |
+| x86-64, Linux/macOS (SysV) | 6 (4 when a buffer-shaped arg is present) | 8                       | Supported          | Not supported               | Supported                |
+| x86-64, Windows (Win64)    | 3 (total arguments also capped at 3)      | 3                       | Not supported      | N/A                         | Supported                |
+| s390x                      | 4                                         | 4                       | Not supported      | N/A                         | Not supported            |
+| PPC64LE                    | 7                                         | 8                       | Not supported      | N/A                         | Not supported            |
+| LoongArch64                | 7                                         | 8                       | Not supported      | N/A                         | Not supported            |
+| RISC-V (64-bit)            | 7                                         | 8                       | Not supported      | N/A                         | Not supported            |
+
+PPC64BE has no fast-call trampoline and always uses the generic call path.
+"Buffer-shaped args" means `Buffer`, typed array, `DataView`, or `ArrayBuffer`
+values passed as pointer-like arguments. Functions whose argument or return
+types exceed the limits for the current platform use one of the other
+[call paths][] instead.
 
 ## Signature objects
 
 Functions and callbacks are described with signature objects.
 
-Supported fields:
+Signature objects may contain the following properties, both of which are
+optional:
 
-* `result`, `return`, or `returns` for the return type.
-* `parameters` or `arguments` for the parameter type list.
+* `return` {string} A [type name][type names] specifying the return type of the
+  function or callback. **Default:** `'void'`.
+* `arguments` {string\[]} An array of [type names][] specifying the argument
+  type list of the function or callback. **Default:** `[]`.
 
-Only one return-type field and one parameter-list field may be present in a
-single signature object.
-
-```cjs
+```js
 const signature = {
-  result: 'i32',
-  parameters: ['i32', 'i32'],
+  return: 'int32',
+  arguments: ['int32', 'int32'],
 };
 ```
 
 ## `ffi.suffix`
 
 <!-- YAML
-added: REPLACEME
+added: v26.1.0
 -->
 
 * {string}
@@ -162,7 +209,12 @@ const path = `libsqlite3.${suffix}`;
 ## `ffi.dlopen(path[, definitions])`
 
 <!-- YAML
-added: REPLACEME
+added: v26.1.0
+changes:
+  - version: v26.10.0
+    pr-url: https://github.com/nodejs/node/pull/65909
+    description: Library paths inside a mounted virtual file system are now
+                 supported.
 -->
 
 * `path` {string|null} Path to a dynamic library, or `null` to resolve symbols
@@ -174,6 +226,13 @@ Loads a dynamic library and resolves the requested function definitions.
 
 On Windows passing `null` is not supported.
 
+A `path` inside a mounted [virtual file system][] is supported: the
+operating system's dynamic loader cannot open a virtual path, so the
+library's bytes are read from the VFS and loaded from a private,
+self-cleaning temporary image instead, while `lib.path` keeps reporting
+the virtual path. Libraries on the real file system are unaffected and
+load directly.
+
 When `definitions` is omitted, `functions` is returned as an empty object until
 symbols are resolved explicitly.
 
@@ -182,23 +241,38 @@ The returned object contains:
 * `lib` {DynamicLibrary} The loaded library handle.
 * `functions` {Object} Callable wrappers for the requested symbols.
 
-```mjs
-import { dlopen } from 'node:ffi';
+The returned object also implements the explicit resource management protocol,
+so it can be used with the [`using`][] declaration. Disposing the returned
+object closes the library handle.
 
-const { lib, functions } = dlopen('./mylib.so', {
-  add_i32: { parameters: ['i32', 'i32'], result: 'i32' },
-  string_length: { parameters: ['pointer'], result: 'u64' },
+```mjs
+import { dlopen, suffix } from 'node:ffi';
+
+{
+  using handle = dlopen(`./mylib.${suffix}`, {
+    add_i32: { arguments: ['int32', 'int32'], return: 'int32' },
+  });
+  console.log(handle.functions.add_i32(20, 22));
+} // handle.lib.close() is invoked automatically here.
+```
+
+```mjs
+import { dlopen, suffix } from 'node:ffi';
+
+const { lib, functions } = dlopen(`./mylib.${suffix}`, {
+  add_i32: { arguments: ['int32', 'int32'], return: 'int32' },
+  string_length: { arguments: ['pointer'], return: 'uint64' },
 });
 
 console.log(functions.add_i32(20, 22));
 ```
 
 ```cjs
-const { dlopen } = require('node:ffi');
+const { dlopen, suffix } = require('node:ffi');
 
-const { lib, functions } = dlopen('./mylib.so', {
-  add_i32: { parameters: ['i32', 'i32'], result: 'i32' },
-  string_length: { parameters: ['pointer'], result: 'u64' },
+const { lib, functions } = dlopen(`./mylib.${suffix}`, {
+  add_i32: { arguments: ['int32', 'int32'], return: 'int32' },
+  string_length: { arguments: ['pointer'], return: 'uint64' },
 });
 
 console.log(functions.add_i32(20, 22));
@@ -207,7 +281,7 @@ console.log(functions.add_i32(20, 22));
 ## `ffi.dlclose(handle)`
 
 <!-- YAML
-added: REPLACEME
+added: v26.1.0
 -->
 
 * `handle` {DynamicLibrary}
@@ -219,7 +293,7 @@ This is equivalent to calling `handle.close()`.
 ## `ffi.dlsym(handle, symbol)`
 
 <!-- YAML
-added: REPLACEME
+added: v26.1.0
 -->
 
 * `handle` {DynamicLibrary}
@@ -233,12 +307,20 @@ This is equivalent to calling `handle.getSymbol(symbol)`.
 ## Class: `DynamicLibrary`
 
 <!-- YAML
-added: REPLACEME
+added: v26.1.0
 -->
 
 Represents a loaded dynamic library.
 
 ### `new DynamicLibrary(path)`
+
+<!-- YAML
+changes:
+  - version: v26.10.0
+    pr-url: https://github.com/nodejs/node/pull/65909
+    description: Library paths inside a mounted virtual file system are now
+                 supported.
+-->
 
 * `path` {string|null} Path to a dynamic library, or `null` to resolve symbols
   from the current process image.
@@ -247,10 +329,13 @@ Loads the dynamic library without resolving any functions eagerly.
 
 On Windows passing `null` is not supported.
 
-```cjs
-const { DynamicLibrary } = require('node:ffi');
+A `path` inside a mounted [virtual file system][] loads the same way as
+with [`ffi.dlopen()`][].
 
-const lib = new DynamicLibrary('./mylib.so');
+```cjs
+const { DynamicLibrary, suffix } = require('node:ffi');
+
+const lib = new DynamicLibrary(`./mylib.${suffix}`);
 ```
 
 ### `library.path`
@@ -275,6 +360,21 @@ An object containing previously resolved symbol addresses as `bigint` values.
 
 Closes the library handle.
 
+`DynamicLibrary` implements the explicit resource management protocol, so a
+library instance can be managed with the [`using`][] declaration. Leaving the
+enclosing scope invokes `library.close()` automatically.
+
+```mjs
+import { DynamicLibrary, suffix } from 'node:ffi';
+
+{
+  using lib = new DynamicLibrary(`./mylib.${suffix}`);
+  // Use `lib` here; `lib.close()` is called when the block exits.
+}
+```
+
+Calling `library.close()` (or disposing the library) more than once is a no-op.
+
 After a library has been closed:
 
 * Resolved function wrappers become invalid.
@@ -295,6 +395,16 @@ Calling `library.close()` from one of the library's active callbacks is
 unsupported and dangerous. The callback must return before the library is
 closed.
 
+### `library[Symbol.dispose]()`
+
+<!-- YAML
+added: v26.1.0
+-->
+
+Calls `library.close()`. This allows `DynamicLibrary` instances to be used with
+the [`using`][] declaration for automatic cleanup when the enclosing scope
+exits. It is a no-op on a library that has already been closed.
+
 ### `library.getFunction(name, signature)`
 
 * `name` {string}
@@ -307,15 +417,16 @@ The returned function has a `.pointer` property containing the native function
 address as a `bigint`.
 
 If the same symbol has already been resolved, requesting it again with a
-different signature throws.
+different signature throws. Requesting it again with the same signature returns
+the same function, as does reading it from [`library.functions`][].
 
 ```cjs
-const { DynamicLibrary } = require('node:ffi');
+const { DynamicLibrary, suffix } = require('node:ffi');
 
-const lib = new DynamicLibrary('./mylib.so');
+const lib = new DynamicLibrary(`./mylib.${suffix}`);
 const add = lib.getFunction('add_i32', {
-  parameters: ['i32', 'i32'],
-  result: 'i32',
+  arguments: ['int32', 'int32'],
+  return: 'int32',
 });
 
 console.log(add(20, 22));
@@ -360,12 +471,12 @@ The return value is the callback pointer address as a `bigint`. It can be
 passed to native functions expecting a callback pointer.
 
 ```cjs
-const { DynamicLibrary } = require('node:ffi');
+const { DynamicLibrary, suffix } = require('node:ffi');
 
-const lib = new DynamicLibrary('./mylib.so');
+const lib = new DynamicLibrary(`./mylib.${suffix}`);
 
 const callback = lib.registerCallback(
-  { parameters: ['i32'], result: 'i32' },
+  { arguments: ['int32'], return: 'int32' },
   (value) => value * 2,
 );
 ```
@@ -375,13 +486,21 @@ Callbacks are subject to the following restrictions:
 * They must be invoked on the same system thread where they were created.
 * They must not throw exceptions.
 * They must not return promises.
-* They must return a value compatible with the declared result type.
+* They must return a value compatible with the declared return type.
 * They must not call `library.close()` on their owning library while running.
 * They must not unregister themselves while running.
 
 Closing the owning library or unregistering the currently executing callback
 from inside the callback is unsupported and dangerous. Doing so may crash the
 process, produce incorrect output, or corrupt memory.
+
+If the thread running a callback is stopped while the callback executes, for
+example by `worker.terminate()`, by `process.exit()` in a Worker, or by the
+main thread exiting, only that thread stops. The callback returns to native
+code without a value: non-void return values are zero-initialized, so native
+code receives `0`, `false`, or a null pointer. Native code that does not
+handle such a value, for example by dereferencing a returned null pointer, can
+crash the process.
 
 ### `library.unregisterCallback(pointer)`
 
@@ -404,6 +523,10 @@ memory.
 
 Keeps the callback strongly referenced by JavaScript.
 
+Throws `ERR_INVALID_ARG_VALUE` if the callback function has already been
+garbage collected after a previous `library.unrefCallback(pointer)` call, since
+a collected function cannot be referenced again.
+
 ### `library.unrefCallback(pointer)`
 
 * `pointer` {bigint}
@@ -414,6 +537,9 @@ If the callback function is later garbage collected, subsequent native
 invocations become a no-op. Non-void return values are zero-initialized before
 returning to native code.
 
+Throws `ERR_INVALID_ARG_VALUE` if the callback function has already been
+garbage collected.
+
 ## Calling native functions
 
 Argument conversion depends on the declared FFI type.
@@ -421,9 +547,19 @@ Argument conversion depends on the declared FFI type.
 For 8-, 16-, and 32-bit integer types and for floating-point types, pass
 JavaScript `number` values that match the declared type.
 
-For 64-bit integer types (`i64` and `u64`), pass JavaScript `bigint` values.
+For 64-bit integer types (`int64` and `uint64`), pass JavaScript `bigint`
+values within the declared type's range or safe integer `number` values.
+For `int64`, numbers must be between `Number.MIN_SAFE_INTEGER` and
+`Number.MAX_SAFE_INTEGER`, inclusive. For `uint64`, numbers must be between
+`0` and `Number.MAX_SAFE_INTEGER`, inclusive. This allows buffer lengths such
+as `buffer.byteLength` to be passed without an explicit `BigInt()` conversion.
+Use `bigint` for integers outside JavaScript's safe integer range.
 
-For pointer-like parameters:
+Invalid arguments, including fractional numbers, `NaN`, infinities, and values
+outside these ranges, throw `ERR_INVALID_ARG_VALUE`. Return values for 64-bit
+integer types are always exposed as `bigint` values.
+
+For pointer-like arguments:
 
 * `null` and `undefined` are passed as null pointers.
 * `string` values are copied to temporary NUL-terminated UTF-8 strings for the
@@ -434,6 +570,139 @@ For pointer-like parameters:
 * `bigint` values are passed as raw pointer addresses.
 
 Pointer return values are exposed as `bigint` addresses.
+
+## Call paths
+
+When a symbol is resolved through [`ffi.dlopen()`][],
+[`library.getFunction()`][], or [`library.getFunctions()`][], Node.js selects
+one of three native call paths for the returned wrapper. The selection is based
+on the declared signature, on the current platform, and on the capabilities of
+the current process. It is made once when the function is created, cannot be
+configured, and is not observable from JavaScript.
+
+The call paths are designed to accept the same JavaScript values for each
+[type name][type names], to perform the same validation, and to throw the same
+errors, so that applications do not need to know which call path a particular
+function uses. They differ in how much work is done per call. The paths exist
+so that common signatures can be called with as little overhead as possible
+while every supported signature keeps working.
+
+Node.js tries the call paths in the following order and uses the first one that
+supports the signature:
+
+1. The [Fast API call path][], which lets optimized JavaScript call the native
+   symbol directly through a generated per-signature trampoline.
+2. The [shared buffer call path][], which passes arguments through a
+   preallocated buffer instead of converting each argument across the
+   JavaScript and C++ boundary on every call.
+3. The [generic call path][], which converts each argument in C++ and calls the
+   symbol through `libffi`. This path supports every signature.
+
+The contributor guide [FFI Fast API internals][] describes the implementation of
+these call paths in detail.
+
+### Fast API call path
+
+The Fast API call path binds the wrapper as a V8 Fast API function. When
+JavaScript code calling the wrapper is optimized by V8, the call goes from the
+optimized code straight into a small native trampoline that Node.js generates
+for the exact signature when the function is created. The trampoline moves the
+arguments into the registers expected by the native symbol and calls it. For
+the scalar entry point, there is no intermediate argument conversion in C++.
+
+Functions on this path keep a conventional native entry point as well. Calls
+from code that V8 has not optimized, or that V8 deoptimizes, use that entry
+point, which behaves like the [generic call path][]. This is transparent to the
+caller.
+
+Pointer-like arguments are prepared in JavaScript before the trampoline runs:
+
+* `null` and `undefined` become null pointers.
+* `string` values are copied into temporary NUL-terminated UTF-8 buffers for
+  the duration of the call.
+* `Buffer`, typed array, `DataView`, and `ArrayBuffer` values are converted to
+  raw pointer `bigint` values, unless the alternate entry point described below
+  handles them.
+* `bigint` values are passed through unchanged.
+
+For signatures with a single `pointer`, `buffer`, or `arraybuffer` argument,
+Node.js also creates an alternate Fast API entry point that receives `Buffer`,
+typed array, `DataView`, and `ArrayBuffer` values directly. The JavaScript
+wrapper dispatches to it when the argument is such a value, and a native helper
+extracts the pointer from the backing store instead of converting the value in
+JavaScript.
+
+A function uses this call path only when all of the following conditions are
+met:
+
+* The process runs on a supported 64-bit architecture: AArch64, x86-64,
+  PPC64LE, LoongArch64, RISC-V 64, or s390x. 32-bit platforms and big-endian
+  PPC64 always use another call path.
+* The process can allocate executable memory. Node.js checks once per process
+  whether it can allocate memory and mark it executable. If that check fails,
+  this path is disabled for the entire process.
+* Neither the return type nor any argument type is `function`.
+* The signature has at most 8 arguments, and every argument fits in the
+  argument registers available to the trampoline on the current platform.
+  Arguments that would have to be passed on the native stack are not supported.
+
+The register limits are platform-specific. Integer and pointer-like arguments
+share one set of registers, and floating-point arguments share another. The
+limits for each architecture are listed in [Type names][].
+
+A signature that fails any of these checks is not an error. The function is
+created on the next call path that supports it.
+
+### Shared buffer call path
+
+The shared buffer call path is used for signatures that the Fast API call path
+does not support. When the function is created, Node.js allocates a small
+per-function buffer with one 8-byte slot for the return value and one 8-byte
+slot for each argument. On every call, the JavaScript wrapper validates the
+arguments, writes them into their slots, invokes the native symbol through
+`libffi` without passing any JavaScript arguments, and then reads the return
+value back from the buffer. This avoids converting each argument individually
+across the JavaScript and C++ boundary.
+
+A function uses this call path when all of the following conditions are met:
+
+* The Fast API call path is not available for the signature.
+* The host is little-endian.
+* The signature has at least one argument. Zero-argument functions gain nothing
+  from the shared buffer and use another call path instead.
+
+All type names are supported on this path, and there is no limit on the number
+of arguments.
+
+Pointer-like arguments (`pointer`, `string`, `buffer`, `arraybuffer`, and
+`function`) are written to the shared buffer only when the value is a `bigint`,
+`null`, or `undefined`. When a call passes a string, `Buffer`, typed array,
+`DataView`, or `ArrayBuffer` to a pointer-like parameter, that individual call
+is handed off to the [generic call path][], which performs the conversion in
+C++. The function itself stays on the shared buffer call path for later calls.
+
+The shared buffer is private to each function. Reentrant calls to the same
+function, for example from an FFI callback, are safe because the native side
+copies the arguments out of the buffer before invoking the symbol.
+
+### Generic call path
+
+The generic call path converts each JavaScript argument to its native
+representation in C++ and calls the symbol through `libffi`. It supports every
+signature that `node:ffi` accepts and is the reference implementation for the
+argument validation and error behavior that the other call paths reproduce.
+
+A function is created directly on this call path when the Fast API call path
+is unavailable and either the host is big-endian or the signature has no
+arguments.
+
+The generic call path also serves individual calls handed off by the other call
+paths, such as unoptimized or deoptimized call sites of a Fast API function and
+shared buffer calls that pass non-`bigint` pointer-like values.
+
+Callbacks created with [`library.registerCallback()`][] are always implemented
+with `libffi` closures. They are independent of the call path used by any
+function.
 
 ## Primitive memory access helpers
 
@@ -492,7 +761,7 @@ process.
 ## `ffi.toString(pointer)`
 
 <!-- YAML
-added: REPLACEME
+added: v26.1.0
 -->
 
 * `pointer` {bigint}
@@ -517,7 +786,7 @@ const value = toString(ptr);
 ## `ffi.toBuffer(pointer, length[, copy])`
 
 <!-- YAML
-added: REPLACEME
+added: v26.1.0
 -->
 
 * `pointer` {bigint}
@@ -548,7 +817,7 @@ memory or crash the process.
 ## `ffi.toArrayBuffer(pointer, length[, copy])`
 
 <!-- YAML
-added: REPLACEME
+added: v26.1.0
 -->
 
 * `pointer` {bigint}
@@ -572,7 +841,7 @@ entire exposed range.
 ## `ffi.exportString(string, pointer, length[, encoding])`
 
 <!-- YAML
-added: REPLACEME
+added: v26.1.0
 -->
 
 * `string` {string}
@@ -595,7 +864,7 @@ available storage. This function does not allocate memory on its own.
 ## `ffi.exportBuffer(buffer, pointer, length)`
 
 <!-- YAML
-added: REPLACEME
+added: v26.1.0
 -->
 
 * `buffer` {Buffer}
@@ -614,7 +883,7 @@ available storage. This function does not allocate memory on its own.
 ## `ffi.exportArrayBuffer(arrayBuffer, pointer, length)`
 
 <!-- YAML
-added: REPLACEME
+added: v26.1.0
 -->
 
 * `arrayBuffer` {ArrayBuffer}
@@ -631,7 +900,7 @@ available storage. This function does not allocate memory on its own.
 ## `ffi.exportArrayBufferView(arrayBufferView, pointer, length)`
 
 <!-- YAML
-added: REPLACEME
+added: v26.1.0
 -->
 
 * `arrayBufferView` {ArrayBufferView}
@@ -648,10 +917,10 @@ available storage. This function does not allocate memory on its own.
 ## `ffi.getRawPointer(source)`
 
 <!-- YAML
-added: REPLACEME
+added: v26.1.0
 -->
 
-* `source` {Buffer|ArrayBuffer|ArrayBufferView}
+* `source` {Buffer|ArrayBuffer|SharedArrayBuffer|ArrayBufferView}
 * Returns: {bigint}
 
 Returns the raw memory address of JavaScript-managed byte storage.
@@ -659,6 +928,25 @@ Returns the raw memory address of JavaScript-managed byte storage.
 This is unsafe and dangerous. The returned pointer can become invalid if the
 underlying memory is detached, resized, transferred, or otherwise invalidated.
 Using stale pointers can cause memory corruption or process crashes.
+
+## `ffi.getCurrentEventLoop()`
+
+<!-- YAML
+added: v26.6.0
+-->
+
+* Returns: {bigint}
+
+Returns the address of the current thread's `uv_loop_t` as a `bigint`.
+
+The returned address is for the current Node.js environment. In the main thread,
+this is the main thread event loop. In a worker thread, this is that worker's
+event loop.
+
+This is unsafe and dangerous. The returned pointer is only valid for the lifetime
+of the current environment. Using it after the environment exits, or from native
+code that assumes a different thread or lifetime, can crash the process or
+corrupt memory.
 
 ## Safety notes
 
@@ -681,6 +969,19 @@ In particular:
 As a general rule, prefer copied values unless zero-copy access is required,
 and keep callback and pointer lifetimes explicit on the native side.
 
+[FFI Fast API internals]: https://github.com/nodejs/node/blob/HEAD/doc/contributing/ffi-fast-api-internals.md
+[Fast API call path]: #fast-api-call-path
 [Permission Model]: permissions.md#permission-model
 [`--allow-ffi`]: cli.md#--allow-ffi
+[`ffi.dlopen()`]: #ffidlopenpath-definitions
 [`ffi.toBuffer(pointer, length, copy)`]: #ffitobufferpointer-length-copy
+[`library.functions`]: #libraryfunctions
+[`library.getFunction()`]: #librarygetfunctionname-signature
+[`library.getFunctions()`]: #librarygetfunctionsdefinitions
+[`library.registerCallback()`]: #libraryregistercallbacksignature-callback
+[`using`]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/using
+[call paths]: #call-paths
+[generic call path]: #generic-call-path
+[shared buffer call path]: #shared-buffer-call-path
+[type names]: #type-names
+[virtual file system]: vfs.md

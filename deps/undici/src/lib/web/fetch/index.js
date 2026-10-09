@@ -11,7 +11,7 @@ const {
   getResponseState
 } = require('./response')
 const { HeadersList } = require('./headers')
-const { Request, cloneRequest, getRequestDispatcher, getRequestState } = require('./request')
+const { Request, cloneRequest, getRequestDispatcher, getRequestState, removeRequestAbortListener } = require('./request')
 const zlib = require('node:zlib')
 const {
   makePolicyContainer,
@@ -59,6 +59,7 @@ const {
 const EE = require('node:events')
 const { Readable, pipeline, finished, isErrored, isReadable } = require('node:stream')
 const { addAbortListener, bufferToLowerCasedHeaderName } = require('../../core/util')
+const { SocketError } = require('../../core/errors')
 const { dataURLProcessor, serializeAMimeType, minimizeSupportedMimeType } = require('./data-url')
 const { getGlobalDispatcher } = require('../../global')
 const { webidl } = require('../webidl')
@@ -74,6 +75,35 @@ const defaultUserAgent = typeof __UNDICI_IS_NODE__ !== 'undefined' || typeof esb
 
 /** @type {import('buffer').resolveObjectURL} */
 let resolveObjectURL
+
+function appendHeadersListFromResponseHeaders (headersList, headers, rawHeaders) {
+  if (Array.isArray(rawHeaders)) {
+    for (let i = 0; i < rawHeaders.length; i += 2) {
+      const nameStr = bufferToLowerCasedHeaderName(rawHeaders[i])
+      const value = rawHeaders[i + 1]
+
+      if (Array.isArray(value) && !Buffer.isBuffer(value)) {
+        for (const val of value) {
+          headersList.append(nameStr, val.toString('latin1'), true)
+        }
+      } else {
+        headersList.append(nameStr, value.toString('latin1'), true)
+      }
+    }
+
+    return
+  }
+
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        headersList.append(name, `${entry}`, true)
+      }
+    } else {
+      headersList.append(name, `${value}`, true)
+    }
+  }
+}
 
 class Fetch extends EE {
   constructor (dispatcher) {
@@ -179,7 +209,7 @@ function fetch (input, init = undefined) {
   let controller = null
 
   // 11. Add the following abort steps to requestObject’s signal:
-  addAbortListener(
+  const removeAbortListener = addAbortListener(
     requestObject.signal,
     () => {
       // 1. Set locallyAborted to true.
@@ -198,6 +228,15 @@ function fetch (input, init = undefined) {
       abortFetch(p, request, realResponse, requestObject.signal.reason, controller.controller)
     }
   )
+
+  // Remove the `abort` listeners registered above and in the Request
+  // constructor once the fetch has settled. Without this, reusing a single
+  // signal across many requests leaks listeners and Node.js emits a
+  // MaxListenersExceededWarning. See https://github.com/nodejs/undici/issues/5285
+  const cleanupAbortListeners = () => {
+    removeAbortListener()
+    removeRequestAbortListener(requestObject)
+  }
 
   // 12. Let handleFetchDone given response response be to finalize and
   // report timing with response, globalObject, and "fetch".
@@ -223,6 +262,7 @@ function fetch (input, init = undefined) {
       //    deserializedError.
 
       abortFetch(p, request, responseObject, controller.serializedAbortReason, controller.controller)
+      cleanupAbortListeners()
       return
     }
 
@@ -230,6 +270,7 @@ function fetch (input, init = undefined) {
     // and terminate these substeps.
     if (response.type === 'error') {
       p.reject(new TypeError('fetch failed', { cause: response.error }))
+      cleanupAbortListeners()
       return
     }
 
@@ -244,7 +285,10 @@ function fetch (input, init = undefined) {
 
   controller = fetching({
     request,
-    processResponseEndOfBody: handleFetchDone,
+    processResponseEndOfBody: (response) => {
+      handleFetchDone(response)
+      cleanupAbortListeners()
+    },
     processResponse,
     dispatcher: getRequestDispatcher(requestObject), // undici
     // Keep requestObject alive to prevent its AbortController from being GC'd
@@ -768,11 +812,8 @@ async function mainFetch (fetchParams, recursive) {
 // https://fetch.spec.whatwg.org/#concept-scheme-fetch
 // given a fetch params fetchParams
 function schemeFetch (fetchParams) {
-  // Note: since the connection is destroyed on redirect, which sets fetchParams to a
-  // cancelled state, we do not want this condition to trigger *unless* there have been
-  // no redirects. See https://github.com/nodejs/undici/issues/1776
   // 1. If fetchParams is canceled, then return the appropriate network error for fetchParams.
-  if (isCancelled(fetchParams) && fetchParams.request.redirectCount === 0) {
+  if (isCancelled(fetchParams)) {
     return Promise.resolve(makeAppropriateNetworkError(fetchParams))
   }
 
@@ -986,18 +1027,18 @@ function fetchFinale (fetchParams, response) {
   //    `Server-Timing` from response’s internal response’s header list.
   // TODO
 
-  // 3. Let processResponseEndOfBody be the following steps:
+  // 3. If fetchParams’s request’s destination is "document", then set fetchParams’s controller’s
+  //    full timing info to fetchParams’s timing info.
+  if (fetchParams.request.destination === 'document') {
+    fetchParams.controller.fullTimingInfo = timingInfo
+  }
+
+  // 4. Let processResponseEndOfBody be the following steps:
   const processResponseEndOfBody = () => {
     // 1. Let unsafeEndTime be the unsafe shared current time.
     const unsafeEndTime = Date.now() // ?
 
-    // 2. If fetchParams’s request’s destination is "document", then set fetchParams’s controller’s
-    //    full timing info to fetchParams’s timing info.
-    if (fetchParams.request.destination === 'document') {
-      fetchParams.controller.fullTimingInfo = timingInfo
-    }
-
-    // 3. Set fetchParams’s controller’s report timing steps to the following steps given a global object global:
+    // 2. Set fetchParams’s controller’s report timing steps to the following steps given a global object global:
     fetchParams.controller.reportTimingSteps = () => {
       // 1. If fetchParams’s request’s URL’s scheme is not an HTTP(S) scheme, then return.
       if (!urlIsHttpHttpsScheme(fetchParams.request.url)) {
@@ -1025,7 +1066,7 @@ function fetchFinale (fetchParams, response) {
       let responseStatus = 0
 
       // 7. If fetchParams’s request’s mode is not "navigate" or response’s has-cross-origin-redirects is false:
-      if (fetchParams.request.mode !== 'navigator' || !response.hasCrossOriginRedirects) {
+      if (fetchParams.request.mode !== 'navigate' || !response.hasCrossOriginRedirects) {
         // 1. Set responseStatus to response’s status.
         responseStatus = response.status
 
@@ -1046,7 +1087,7 @@ function fetchFinale (fetchParams, response) {
       }
     }
 
-    // 4. Let processResponseEndOfBodyTask be the following steps:
+    // 3. Let processResponseEndOfBodyTask be the following steps:
     const processResponseEndOfBodyTask = () => {
       // 1. Set fetchParams’s request’s done flag.
       fetchParams.request.done = true
@@ -1065,11 +1106,11 @@ function fetchFinale (fetchParams, response) {
       }
     }
 
-    // 5. Queue a fetch task to run processResponseEndOfBodyTask with fetchParams’s task destination
+    // 4. Queue a fetch task to run processResponseEndOfBodyTask with fetchParams’s task destination
     queueMicrotask(() => processResponseEndOfBodyTask())
   }
 
-  // 4. If fetchParams’s process response is non-null, then queue a fetch task to run fetchParams’s
+  // 5. If fetchParams’s process response is non-null, then queue a fetch task to run fetchParams’s
   //    process response given response, with fetchParams’s task destination.
   if (fetchParams.processResponse != null) {
     queueMicrotask(() => {
@@ -1078,11 +1119,14 @@ function fetchFinale (fetchParams, response) {
     })
   }
 
-  // 5. Let internalResponse be response, if response is a network error; otherwise response’s internal response.
+  // 6. Let internalResponse be response, if response is a network error; otherwise response’s internal response.
   const internalResponse = response.type === 'error' ? response : (response.internalResponse ?? response)
 
-  // 6. If internalResponse’s body is null, then run processResponseEndOfBody.
-  // 7. Otherwise:
+  // 7. If response is a network error, then run the WebDriver BiDi fetch error steps with request.
+  //    Otherwise, run the WebDriver BiDi response completed steps with request and response.
+
+  // 8. If internalResponse’s body is null, then run processResponseEndOfBody.
+  // 9. Otherwise:
   if (internalResponse.body == null) {
     processResponseEndOfBody()
   } else {
@@ -1099,6 +1143,27 @@ function fetchFinale (fetchParams, response) {
     finished(internalResponse.body.stream, () => {
       processResponseEndOfBody()
     })
+  }
+
+  // 10. If fetchParams’s process response consume body is non-null, then:
+  if (fetchParams.processResponseConsumeBody != null) {
+    // 1. Let processBody given nullOrBytes be this step: run fetchParams’s
+    //    process response consume body given response and nullOrBytes.
+    const processBody = (nullOrBytes) => fetchParams.processResponseConsumeBody(response, nullOrBytes)
+
+    // 2. Let processBodyError be this step: run fetchParams’s process
+    //    response consume body given response and failure.
+    const processBodyError = () => fetchParams.processResponseConsumeBody(response, 'failure')
+
+    // 3. If internalResponse’s body is null, then queue a fetch task to run
+    //    processBody given null, with fetchParams’s task destination.
+    if (internalResponse.body == null) {
+      queueMicrotask(() => processBody(null))
+    } else {
+      // 4. Otherwise, fully read internalResponse’s body given processBody,
+      //    processBodyError, and fetchParams’s task destination.
+      fullyReadBody(internalResponse.body, processBody, processBodyError)
+    }
   }
 }
 
@@ -1175,7 +1240,7 @@ async function httpFetch (fetchParams) {
     // encouraged to, transmit an RST_STREAM frame.
     // See, https://github.com/whatwg/fetch/issues/1288
     if (request.redirect !== 'manual') {
-      fetchParams.controller.connection.destroy(undefined, false)
+      fetchParams.controller.connection.destroy()
     }
 
     // 2. Switch on request’s redirect mode:
@@ -1388,7 +1453,16 @@ async function httpNetworkOrCacheFetch (
     // Otherwise:
 
     // 1. Set httpRequest to a clone of request.
-    httpRequest = cloneRequest(request)
+    // Implementations are encouraged to avoid teeing request’s body’s stream
+    // when request’s body’s source is null as only a single body is needed in
+    // that case. E.g., when request’s body’s source is null, redirects and
+    // authentication will end up failing the fetch.
+    if (request.body?.source != null) {
+      httpRequest = cloneRequest(request)
+    } else {
+      httpRequest = cloneRequest({ ...request, body: null })
+      httpRequest.body = request.body
+    }
 
     // 2. Set httpFetchParams to a copy of fetchParams.
     httpFetchParams = { ...fetchParams }
@@ -1428,7 +1502,10 @@ async function httpNetworkOrCacheFetch (
   //    8. If contentLengthHeaderValue is non-null, then append
   //    `Content-Length`/contentLengthHeaderValue to httpRequest’s header
   //    list.
-  if (contentLengthHeaderValue != null) {
+  if (
+    contentLengthHeaderValue != null &&
+    !httpRequest.headersList.contains('content-length', true)
+  ) {
     httpRequest.headersList.append('content-length', contentLengthHeaderValue, true)
   }
 
@@ -1514,7 +1591,7 @@ async function httpNetworkOrCacheFetch (
   //    TODO: https://github.com/whatwg/fetch/issues/1285#issuecomment-896560129
   if (!httpRequest.headersList.contains('accept-encoding', true)) {
     if (urlHasHttpsScheme(requestCurrentURL(httpRequest))) {
-      httpRequest.headersList.append('accept-encoding', 'br, gzip, deflate', true)
+      httpRequest.headersList.append('accept-encoding', 'br, gzip, deflate, zstd', true)
     } else {
       httpRequest.headersList.append('accept-encoding', 'gzip, deflate', true)
     }
@@ -1772,12 +1849,10 @@ async function httpNetworkFetch (
   fetchParams.controller.connection = {
     abort: null,
     destroyed: false,
-    destroy (err, abort = true) {
+    destroy (err) {
       if (!this.destroyed) {
         this.destroyed = true
-        if (abort) {
-          this.abort?.(err ?? new DOMException('The operation was aborted.', 'AbortError'))
-        }
+        this.abort?.(err ?? new DOMException('The operation was aborted.', 'AbortError'))
       }
     }
   }
@@ -2152,6 +2227,8 @@ async function httpNetworkFetch (
           origin: url.origin,
           method: request.method,
           body: agent.isMockActive ? request.body && (request.body.source || request.body.stream) : body,
+          // Preserve the serialized fetch body for MockAgent net-connect fallthroughs.
+          __mockAgentBodyForDispatch: body,
           headers: request.headersList.entries,
           maxRedirections: 0,
           upgrade: request.mode === 'websocket' ? 'websocket' : undefined,
@@ -2193,25 +2270,14 @@ async function httpNetworkFetch (
             timingInfo.finalNetworkResponseStartTime = coarsenedSharedCurrentTime(fetchParams.crossOriginIsolatedCapability)
           },
 
-          onResponseStart (controller, status, _headers, statusText) {
+          onResponseStart (controller, status, headers, statusText) {
             if (status < 200) {
               return
             }
 
             const rawHeaders = controller?.rawHeaders ?? []
             const headersList = new HeadersList()
-
-            for (let i = 0; i < rawHeaders.length; i += 2) {
-              const nameStr = bufferToLowerCasedHeaderName(rawHeaders[i])
-              const value = rawHeaders[i + 1]
-              if (Array.isArray(value) && !Buffer.isBuffer(rawHeaders[i + 1])) {
-                for (const val of value) {
-                  headersList.append(nameStr, val.toString('latin1'), true)
-                }
-              } else {
-                headersList.append(nameStr, value.toString('latin1'), true)
-              }
-            }
+            appendHeadersListFromResponseHeaders(headersList, headers, rawHeaders)
             const location = headersList.get('location', true)
 
             this.body = new Readable({ read: () => controller.resume() })
@@ -2322,7 +2388,7 @@ async function httpNetworkFetch (
             this.body?.push(null)
           },
 
-          onResponseError (_controller, error) {
+          onResponseError (controller, error) {
             if (this.abort) {
               fetchParams.controller.off('terminated', this.abort)
             }
@@ -2341,32 +2407,28 @@ async function httpNetworkFetch (
 
             this.body?.destroy(error)
 
-            fetchParams.controller.terminate(error)
+            if (!controller?.aborted) {
+              fetchParams.controller.terminate(error)
+            }
 
             reject(error)
           },
 
-          onRequestUpgrade (controller, status, _headers, socket) {
+          onRequestUpgrade (controller, status, headers, socket) {
             // We need to support 200 for websocket over h2 as per RFC-8441
             // Absence of session means H1
             if ((socket.session != null && status !== 200) || (socket.session == null && status !== 101)) {
+              if (socket.session != null) {
+                // The server refused the extended CONNECT, and nothing further
+                // will settle this request. Fail the opening handshake here.
+                controller.abort(new SocketError('bad upgrade', null))
+              }
               return false
             }
 
             const rawHeaders = controller?.rawHeaders ?? []
             const headersList = new HeadersList()
-
-            for (let i = 0; i < rawHeaders.length; i += 2) {
-              const nameStr = bufferToLowerCasedHeaderName(rawHeaders[i])
-              const value = rawHeaders[i + 1]
-              if (Array.isArray(value) && !Buffer.isBuffer(rawHeaders[i + 1])) {
-                for (const val of value) {
-                  headersList.append(nameStr, val.toString('latin1'), true)
-                }
-              } else {
-                headersList.append(nameStr, value.toString('latin1'), true)
-              }
-            }
+            appendHeadersListFromResponseHeaders(headersList, headers, rawHeaders)
 
             resolve({
               status,

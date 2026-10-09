@@ -13,6 +13,7 @@
 
 #include <openssl/evp.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -53,8 +54,8 @@ class KeyObjectData final : public MemoryRetainer {
 
   KeyType GetKeyType() const;
 
-  // These functions allow unprotected access to the raw key material and should
-  // only be used to implement cryptographic operations requiring the key.
+  // The key material is immutable and can be used concurrently by operations
+  // with separate contexts.
   const ncrypto::EVPKeyPointer& GetAsymmetricKey() const;
   const char* GetSymmetricKey() const;
   size_t GetSymmetricKeySize() const;
@@ -62,8 +63,6 @@ class KeyObjectData final : public MemoryRetainer {
   void MemoryInfo(MemoryTracker* tracker) const override;
   SET_MEMORY_INFO_NAME(KeyObjectData)
   SET_SELF_SIZE(KeyObjectData)
-
-  Mutex& mutex() const;
 
   static v8::Maybe<ncrypto::EVPKeyPointer::PublicKeyEncodingConfig>
   GetPublicKeyEncodingFromJs(const v8::FunctionCallbackInfo<v8::Value>& args,
@@ -76,7 +75,9 @@ class KeyObjectData final : public MemoryRetainer {
       bool allow_key_object);
 
   static KeyObjectData GetPublicOrPrivateKeyFromJs(
-      const v8::FunctionCallbackInfo<v8::Value>& args, unsigned int* offset);
+      const v8::FunctionCallbackInfo<v8::Value>& args,
+      unsigned int* offset,
+      bool allow_private_key_store = false);
 
   static v8::Maybe<ncrypto::EVPKeyPointer::PrivateKeyEncodingConfig>
   GetPrivateKeyEncodingFromJs(const v8::FunctionCallbackInfo<v8::Value>& args,
@@ -94,11 +95,11 @@ class KeyObjectData final : public MemoryRetainer {
       v8::Local<v8::Value>* out);
 
   inline KeyObjectData addRef() const {
-    return KeyObjectData(key_type_, mutex_, data_);
+    return KeyObjectData(key_type_, data_);
   }
 
   inline KeyObjectData addRefWithType(KeyType type) const {
-    return KeyObjectData(type, mutex_, data_);
+    return KeyObjectData(type, data_);
   }
 
  private:
@@ -112,22 +113,23 @@ class KeyObjectData final : public MemoryRetainer {
                                     const char* default_msg);
 
   KeyType key_type_;
-  mutable std::shared_ptr<Mutex> mutex_;
 
-  struct Data {
+  struct Data final : public MemoryRetainer {
     const ByteSource symmetric_key;
     const ncrypto::EVPKeyPointer asymmetric_key;
     explicit Data(ByteSource symmetric_key)
         : symmetric_key(std::move(symmetric_key)) {}
     explicit Data(ncrypto::EVPKeyPointer asymmetric_key)
         : asymmetric_key(std::move(asymmetric_key)) {}
+
+    void MemoryInfo(MemoryTracker* tracker) const override;
+    SET_MEMORY_INFO_NAME(KeyObjectData::Data)
+    SET_SELF_SIZE(Data)
   };
   std::shared_ptr<Data> data_;
 
-  KeyObjectData(KeyType type,
-                std::shared_ptr<Mutex> mutex,
-                std::shared_ptr<Data> data)
-      : key_type_(type), mutex_(std::move(mutex)), data_(std::move(data)) {}
+  KeyObjectData(KeyType type, std::shared_ptr<Data> data)
+      : key_type_(type), data_(std::move(data)) {}
 };
 
 class KeyObjectHandle : public BaseObject {
@@ -150,6 +152,7 @@ class KeyObjectHandle : public BaseObject {
   static void New(const v8::FunctionCallbackInfo<v8::Value>& args);
 
   static void Init(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void GetKeyType(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void GetKeyDetail(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void Equals(const v8::FunctionCallbackInfo<v8::Value>& args);
 
@@ -173,6 +176,8 @@ class KeyObjectHandle : public BaseObject {
       const v8::FunctionCallbackInfo<v8::Value>& args);
   static void ExportECPrivateRaw(
       const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void ExportECPrivatePkcs8(
+      const v8::FunctionCallbackInfo<v8::Value>& args);
   static void RawSeed(const v8::FunctionCallbackInfo<v8::Value>& args);
 
   v8::MaybeLocal<v8::Value> ExportSecretKey() const;
@@ -188,6 +193,11 @@ class KeyObjectHandle : public BaseObject {
   KeyObjectData data_;
 };
 
+// NativeKeyObject is the native base class for the Node.js-specific
+// `KeyObject`. It holds the underlying KeyObjectData for structured
+// cloning and exposes the native hidden slot tuple that JS needs:
+// [type enum, KeyObjectHandle]. JS primes a per-instance private-field
+// cache from that result and lazily appends derived metadata there.
 class NativeKeyObject : public BaseObject {
  public:
   static void Initialize(Environment* env, v8::Local<v8::Object> target);
@@ -196,6 +206,16 @@ class NativeKeyObject : public BaseObject {
   static void New(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void CreateNativeKeyObjectClass(
       const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void IsKeyObject(const v8::FunctionCallbackInfo<v8::Value>& args);
+
+  // True if `value` is a real NativeKeyObject instance. Uses the
+  // FunctionTemplate stored on the Environment as a brand check.
+  // Used by `GetSlots` to validate its receiver.
+  static bool HasInstance(Environment* env, v8::Local<v8::Value> value);
+
+  // Returns [type, handle] in one call so JS can prime a per-instance cache
+  // on first access. Derived metadata is not returned from native here.
+  static void GetSlots(const v8::FunctionCallbackInfo<v8::Value>& args);
 
   SET_NO_MEMORY_INFO()
   SET_MEMORY_INFO_NAME(NativeKeyObject)
@@ -231,6 +251,125 @@ class NativeKeyObject : public BaseObject {
   }
 
   KeyObjectData handle_data_;
+};
+
+// NativeCryptoKey is the native base class for the Web Crypto
+// `CryptoKey`. It holds the internal slots - `[[type]]` as an enum,
+// `[[extractable]]`, `[[algorithm]]`, `[[usages]]` as a mask, the
+// primary underlying KeyObjectData. Hybrid KEM CryptoKeys may also store an
+// optional secondary KeyObjectData and optional seed_data, both of which are
+// only used to reconstruct their hybrid key material. The public `type`,
+// `extractable`, `algorithm`, and `usages` accessors on `CryptoKey.prototype`
+// are
+// user-configurable per Web IDL, so internal consumers read these
+// values directly from the C++ side via a single `GetSlots` call
+// which returns all slots at once; JS primes a per-instance cache
+// from that result.
+class NativeCryptoKey : public BaseObject {
+ public:
+  enum InternalFields {
+    kAlgorithmField = BaseObject::kInternalFieldCount,
+    kInternalFieldCount,
+  };
+
+  static void Initialize(Environment* env, v8::Local<v8::Object> target);
+  static void RegisterExternalReferences(ExternalReferenceRegistry* registry);
+
+  static void New(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void CreateCryptoKeyClass(
+      const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void IsCryptoKey(const v8::FunctionCallbackInfo<v8::Value>& args);
+
+  static v8::MaybeLocal<v8::Value> Create(Environment* env,
+                                          const KeyObjectData& data,
+                                          v8::Local<v8::Value> algorithm,
+                                          uint32_t usages_mask,
+                                          bool extractable);
+
+  // True if `value` is a real NativeCryptoKey instance. Uses the
+  // FunctionTemplate stored on the Environment as a brand check.
+  // Used by `GetSlots` to validate its receiver.
+  static bool HasInstance(Environment* env, v8::Local<v8::Value> value);
+
+  // Returns [type, extractable, algorithm, usages mask, handle,
+  // secondary handle, seed data] in one call so JS can prime a per-instance
+  // cache on first access. The secondary handle and seed data slots are only
+  // used by Hybrid KEM CryptoKeys.
+  static void GetSlots(const v8::FunctionCallbackInfo<v8::Value>& args);
+
+  void MemoryInfo(MemoryTracker* tracker) const override;
+  SET_MEMORY_INFO_NAME(NativeCryptoKey)
+  SET_SELF_SIZE(NativeCryptoKey)
+
+  class CryptoKeyTransferData : public worker::TransferData {
+   public:
+    CryptoKeyTransferData(const KeyObjectData& data,
+                          const KeyObjectData& secondary_data,
+                          ByteSource&& seed_data,
+                          v8::Global<v8::Object>&& algorithm,
+                          uint32_t usages_mask,
+                          bool extractable)
+        : data_(data.addRef()),
+          secondary_data_(secondary_data ? secondary_data.addRef()
+                                         : KeyObjectData()),
+          seed_data_(std::move(seed_data)),
+          algorithm_(std::move(algorithm)),
+          usages_mask_(usages_mask),
+          extractable_(extractable) {}
+
+    BaseObjectPtr<BaseObject> Deserialize(
+        Environment* env,
+        v8::Local<v8::Context> context,
+        std::unique_ptr<worker::TransferData> self) override;
+
+    v8::Maybe<bool> FinalizeTransferWrite(
+        v8::Local<v8::Context> context,
+        v8::ValueSerializer* serializer) override;
+
+    void MemoryInfo(MemoryTracker* tracker) const override;
+    SET_MEMORY_INFO_NAME(CryptoKeyTransferData)
+    SET_SELF_SIZE(CryptoKeyTransferData)
+
+   private:
+    KeyObjectData data_;
+    KeyObjectData secondary_data_;
+    ByteSource seed_data_;
+    v8::Global<v8::Object> algorithm_;
+    uint32_t usages_mask_;
+    bool extractable_;
+  };
+
+  BaseObject::TransferMode GetTransferMode() const override;
+  std::unique_ptr<worker::TransferData> CloneForMessaging() const override;
+  v8::Maybe<void> FinalizeTransferRead(
+      v8::Local<v8::Context> context,
+      v8::ValueDeserializer* deserializer) override;
+
+  const KeyObjectData& handle_data() const { return handle_data_; }
+  const KeyObjectData& secondary_handle_data() const {
+    return secondary_handle_data_;
+  }
+
+ private:
+  NativeCryptoKey(Environment* env,
+                  v8::Local<v8::Object> wrap,
+                  const KeyObjectData& handle_data,
+                  const KeyObjectData& secondary_handle_data,
+                  ByteSource&& seed_data)
+      : BaseObject(env, wrap),
+        handle_data_(handle_data.addRef()),
+        secondary_handle_data_(secondary_handle_data
+                                   ? secondary_handle_data.addRef()
+                                   : KeyObjectData()),
+        seed_data_(std::move(seed_data)) {
+    MakeWeak();
+  }
+
+  KeyObjectData handle_data_;
+  KeyObjectData secondary_handle_data_;
+  ByteSource seed_data_;
+  uint32_t usages_mask_ = 0;
+  bool extractable_ = false;
 };
 
 enum WebCryptoKeyFormat {

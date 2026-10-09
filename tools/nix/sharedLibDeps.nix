@@ -5,7 +5,8 @@
   withSQLite ? true,
   withSSL ? true,
   withFFI ? true,
-  withTemporal ? false,
+  withPerfetto ? false,
+  withTemporal ? true,
 }:
 {
   inherit (pkgs)
@@ -15,25 +16,18 @@
     libuv
     merve
     nbytes
+    nghttp2
     simdjson
     simdutf
     uvwasi
     zlib
     zstd
     ;
+  abseil = pkgs.abseil-cpp;
   cares = pkgs.c-ares;
   hdr-histogram = pkgs.hdrhistogram_c;
+  highway = pkgs.libhwy;
   http-parser = pkgs.llhttp;
-  nghttp2 = pkgs.nghttp2.overrideAttrs {
-    patches = [
-      (pkgs.fetchpatch2 {
-        url = "https://github.com/nghttp2/nghttp2/commit/7784fa979d0bcf801a35f1afbb25fb048d815cd7.patch?full_index=1";
-        revert = true;
-        excludes = [ "lib/includes/nghttp2/nghttp2.h" ];
-        hash = "sha256-RG87Qifjpl7HTP9ac2JwHj2XAbDlFgOpAnpZX3ET6gU=";
-      })
-    ];
-  };
 }
 // (pkgs.lib.optionalAttrs withLief {
   inherit (pkgs) lief;
@@ -51,8 +45,11 @@
   ffi = pkgs.libffiReal;
 })
 // (pkgs.lib.optionalAttrs withSSL ({
-  openssl = pkgs.openssl_3_5;
+  inherit (import ./openssl-matrix.nix { inherit pkgs; }) openssl;
 }))
+// (pkgs.lib.optionalAttrs withPerfetto {
+  perfetto = pkgs.perfetto.sdk;
+})
 // (pkgs.lib.optionalAttrs withTemporal {
   inherit (pkgs) temporal_capi;
 })

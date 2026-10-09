@@ -1,7 +1,7 @@
 'use strict'
 
 const { InvalidArgumentError, MaxOriginsReachedError } = require('../core/errors')
-const { kClients, kRunning, kClose, kDestroy, kDispatch, kUrl } = require('../core/symbols')
+const { kBusy, kClients, kConnected, kRunning, kPending, kClose, kDestroy, kDispatch, kUrl } = require('../core/symbols')
 const DispatcherBase = require('./dispatcher-base')
 const Pool = require('./pool')
 const Client = require('./client')
@@ -65,7 +65,7 @@ class Agent extends DispatcherBase {
 
   get [kRunning] () {
     let ret = 0
-    for (const { dispatcher } of this[kClients].values()) {
+    for (const dispatcher of this[kClients].values()) {
       ret += dispatcher[kRunning]
     }
     return ret
@@ -86,54 +86,57 @@ class Agent extends DispatcherBase {
       throw new MaxOriginsReachedError()
     }
 
-    const result = this[kClients].get(key)
-    let dispatcher = result && result.dispatcher
+    let dispatcher = this[kClients].get(key)
     if (!dispatcher) {
-      const closeClientIfUnused = (connected) => {
-        const result = this[kClients].get(key)
-        if (result) {
-          if (connected) result.count -= 1
-          if (result.count <= 0) {
-            this[kClients].delete(key)
-            if (!result.dispatcher.destroyed) {
-              result.dispatcher.close()
-            }
-          }
-
-          let hasOrigin = false
-          for (const entry of this[kClients].values()) {
-            if (entry.origin === origin) {
-              hasOrigin = true
-              break
-            }
-          }
-
-          if (!hasOrigin) {
-            this[kOrigins].delete(origin)
-          }
-        }
-      }
       dispatcher = this[kFactory](opts.origin, allowH2 === false
         ? { ...this[kOptions], allowH2: false }
         : this[kOptions])
-        .on('drain', this[kOnDrain])
-        .on('connect', (origin, targets) => {
-          const result = this[kClients].get(key)
-          if (result) {
-            result.count += 1
+
+      const closeClientIfUnused = () => {
+        if (this[kClients].get(key) !== dispatcher) {
+          return
+        }
+
+        // A GOAWAY detaches the HTTP/2 session before requeued requests are
+        // dispatched on a replacement connection. At that point the pool has
+        // no connected clients and is not busy, but it still has pending work.
+        // Closing it here lets the replacement Client finish those requests
+        // and then destroys that new connection with ClientDestroyedError.
+        if (dispatcher[kConnected] > 0 || dispatcher[kBusy] || dispatcher[kPending] > 0) {
+          return
+        }
+
+        this[kClients].delete(key)
+        if (!dispatcher.destroyed) {
+          dispatcher.close()
+        }
+
+        let hasOrigin = false
+        for (const k of this[kClients].keys()) {
+          if (k === origin || k === `${origin}#http1-only`) {
+            hasOrigin = true
+            break
           }
-          this[kOnConnect](origin, targets)
-        })
+        }
+
+        if (!hasOrigin) {
+          this[kOrigins].delete(origin)
+        }
+      }
+
+      dispatcher
+        .on('drain', this[kOnDrain])
+        .on('connect', this[kOnConnect])
         .on('disconnect', (origin, targets, err) => {
-          closeClientIfUnused(true)
+          closeClientIfUnused()
           this[kOnDisconnect](origin, targets, err)
         })
         .on('connectionError', (origin, targets, err) => {
-          closeClientIfUnused(false)
+          closeClientIfUnused()
           this[kOnConnectionError](origin, targets, err)
         })
 
-      this[kClients].set(key, { count: 0, dispatcher, origin })
+      this[kClients].set(key, dispatcher)
       this[kOrigins].add(origin)
     }
 
@@ -142,7 +145,7 @@ class Agent extends DispatcherBase {
 
   [kClose] () {
     const closePromises = []
-    for (const { dispatcher } of this[kClients].values()) {
+    for (const dispatcher of this[kClients].values()) {
       closePromises.push(dispatcher.close())
     }
     this[kClients].clear()
@@ -152,7 +155,7 @@ class Agent extends DispatcherBase {
 
   [kDestroy] (err) {
     const destroyPromises = []
-    for (const { dispatcher } of this[kClients].values()) {
+    for (const dispatcher of this[kClients].values()) {
       destroyPromises.push(dispatcher.destroy(err))
     }
     this[kClients].clear()
@@ -162,7 +165,7 @@ class Agent extends DispatcherBase {
 
   get stats () {
     const allClientStats = {}
-    for (const { dispatcher } of this[kClients].values()) {
+    for (const dispatcher of this[kClients].values()) {
       if (dispatcher.stats) {
         allClientStats[dispatcher[kUrl].origin] = dispatcher.stats
       }

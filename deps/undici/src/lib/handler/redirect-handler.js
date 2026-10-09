@@ -3,6 +3,7 @@
 const util = require('../core/util')
 const assert = require('node:assert')
 const { InvalidArgumentError } = require('../core/errors')
+const { kRequestOrigin } = require('../core/symbols')
 
 const redirectableStatusCodes = [300, 301, 302, 303, 307, 308]
 
@@ -23,11 +24,17 @@ class RedirectHandler {
       throw new InvalidArgumentError('maxRedirections must be a positive number')
     }
 
+    if (opts.throwOnMaxRedirect != null && typeof opts.throwOnMaxRedirect !== 'boolean') {
+      throw new InvalidArgumentError('throwOnMaxRedirect must be a boolean')
+    }
+
     this.dispatch = dispatch
     this.location = null
-    const { maxRedirections: _, ...cleanOpts } = opts
+    const { maxRedirections: _, stripHeadersOnRedirect, stripHeadersOnCrossOriginRedirect, ...cleanOpts } = opts
     this.opts = cleanOpts // opts must be a copy, exclude maxRedirections
     this.opts.body = util.wrapRequestBody(this.opts.body)
+    this.stripHeadersOnRedirect = normalizeStripHeaders(stripHeadersOnRedirect, 'stripHeadersOnRedirect')
+    this.stripHeadersOnCrossOriginRedirect = normalizeStripHeaders(stripHeadersOnCrossOriginRedirect, 'stripHeadersOnCrossOriginRedirect')
     this.maxRedirections = maxRedirections
     this.handler = handler
     this.history = []
@@ -37,24 +44,41 @@ class RedirectHandler {
     this.handler.onRequestStart?.(controller, { ...context, history: this.history })
   }
 
+  onBodySent (chunk) {
+    this.handler.onBodySent?.(chunk)
+  }
+
+  onRequestSent () {
+    this.handler.onRequestSent?.()
+  }
+
   onRequestUpgrade (controller, statusCode, headers, socket) {
     this.handler.onRequestUpgrade?.(controller, statusCode, headers, socket)
   }
 
   onResponseStart (controller, statusCode, headers, statusMessage) {
+    if (statusCode < 200) {
+      this.handler.onResponseStart?.(controller, statusCode, headers, statusMessage)
+      return
+    }
+
     if (this.opts.throwOnMaxRedirect && this.history.length >= this.maxRedirections) {
       throw new Error('max redirects')
     }
 
+    let removeContentHeaders = statusCode === 303
+
     // https://tools.ietf.org/html/rfc7231#section-6.4.2
     // https://fetch.spec.whatwg.org/#http-redirect-fetch
     // In case of HTTP 301 or 302 with POST, change the method to GET
+    // QUERY is safe (RFC 10008) and should not change method like GET.
     if ((statusCode === 301 || statusCode === 302) && this.opts.method === 'POST') {
       this.opts.method = 'GET'
       if (util.isStream(this.opts.body)) {
         util.destroy(this.opts.body.on('error', noop))
       }
       this.opts.body = null
+      removeContentHeaders = true
     }
 
     // https://tools.ietf.org/html/rfc7231#section-6.4.4
@@ -71,8 +95,12 @@ class RedirectHandler {
       ? null
       : headers.location
 
-    if (this.opts.origin) {
-      this.history.push(new URL(this.opts.path, this.opts.origin))
+    const requestOrigin = this.opts[kRequestOrigin] === undefined
+      ? this.opts.origin
+      : this.opts[kRequestOrigin]
+
+    if (requestOrigin) {
+      this.history.push(new URL(this.opts.path, requestOrigin))
     }
 
     if (!this.location) {
@@ -80,7 +108,10 @@ class RedirectHandler {
       return
     }
 
-    const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)))
+    const baseUrl = requestOrigin
+      ? new URL(this.opts.path, requestOrigin)
+      : undefined
+    const { origin, pathname, search } = util.parseURL(new URL(this.location, baseUrl))
     const path = search ? `${pathname}${search}` : pathname
 
     // Check for redirect loops by seeing if we've already visited this URL in our history
@@ -94,11 +125,12 @@ class RedirectHandler {
     }
 
     // Remove headers referring to the original URL.
-    // By default it is Host only, unless it's a 303 (see below), which removes also all Content-* headers.
+    // By default it is Host only. A 303 or a 301/302 POST-to-GET redirect also removes all Content-* headers.
     // https://tools.ietf.org/html/rfc7231#section-6.4
-    this.opts.headers = cleanRequestHeaders(this.opts.headers, statusCode === 303, this.opts.origin !== origin)
+    this.opts.headers = cleanRequestHeaders(this.opts.headers, removeContentHeaders, requestOrigin !== origin, this.stripHeadersOnRedirect, this.stripHeadersOnCrossOriginRedirect)
     this.opts.path = path
     this.opts.origin = origin
+    this.opts[kRequestOrigin] = origin
     this.opts.query = null
   }
 
@@ -148,26 +180,49 @@ class RedirectHandler {
 }
 
 // https://tools.ietf.org/html/rfc7231#section-6.4.4
-function shouldRemoveHeader (header, removeContent, unknownOrigin) {
-  if (header.length === 4) {
-    return util.headerNameToString(header) === 'host'
-  }
-  if (removeContent && util.headerNameToString(header).startsWith('content-')) {
+function shouldRemoveHeader (header, removeContent, unknownOrigin, stripHeaders, stripHeadersOnCrossOrigin) {
+  const name = util.headerNameToString(header)
+  if (name === 'host') {
     return true
   }
-  if (unknownOrigin && (header.length === 13 || header.length === 6 || header.length === 19)) {
-    const name = util.headerNameToString(header)
+  if (stripHeaders?.has(name) || (unknownOrigin && stripHeadersOnCrossOrigin?.has(name))) {
+    return true
+  }
+  if (removeContent && name.startsWith('content-')) {
+    return true
+  }
+  if (unknownOrigin) {
     return name === 'authorization' || name === 'cookie' || name === 'proxy-authorization'
   }
   return false
 }
 
 // https://tools.ietf.org/html/rfc7231#section-6.4
-function cleanRequestHeaders (headers, removeContent, unknownOrigin) {
+function normalizeStripHeaders (headers, optionName) {
+  if (headers == null) {
+    return null
+  }
+
+  if (!Array.isArray(headers)) {
+    throw new InvalidArgumentError(`${optionName} must be an array`)
+  }
+
+  const normalized = new Set()
+  for (const header of headers) {
+    if (typeof header !== 'string') {
+      throw new InvalidArgumentError(`${optionName} must contain header names`)
+    }
+
+    normalized.add(util.headerNameToString(header))
+  }
+  return normalized
+}
+
+function cleanRequestHeaders (headers, removeContent, unknownOrigin, stripHeaders, stripHeadersOnCrossOrigin) {
   const ret = []
   if (Array.isArray(headers)) {
     for (let i = 0; i < headers.length; i += 2) {
-      if (!shouldRemoveHeader(headers[i], removeContent, unknownOrigin)) {
+      if (!shouldRemoveHeader(headers[i], removeContent, unknownOrigin, stripHeaders, stripHeadersOnCrossOrigin)) {
         ret.push(headers[i], headers[i + 1])
       }
     }
@@ -175,7 +230,7 @@ function cleanRequestHeaders (headers, removeContent, unknownOrigin) {
     const entries = util.hasSafeIterator(headers) ? headers : Object.entries(headers)
 
     for (const [key, value] of entries) {
-      if (!shouldRemoveHeader(key, removeContent, unknownOrigin)) {
+      if (!shouldRemoveHeader(key, removeContent, unknownOrigin, stripHeaders, stripHeadersOnCrossOrigin)) {
         ret.push(key, value)
       }
     }
